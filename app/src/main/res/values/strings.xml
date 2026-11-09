@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">AutoBrama</string>
+    <string name="channel_name">AutoBrama - Usługa w tle</string>
+    <string name="channel_description">Monitorowanie strefy bramy i Android Auto</string>
+</resources>
