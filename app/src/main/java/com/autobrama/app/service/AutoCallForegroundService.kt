@@ -303,7 +303,13 @@ class AutoCallForegroundService : Service() {
                     }
                     // Never advance zone state on a coarse or uncertain fix.
                     val maxAccuracy = minOf(50f, maxOf(15f, slot.radiusMeters / 2f))
-                    if (location.accuracy <= maxAccuracy) {
+                    // A coarse fix far outside a gate is safe for arming,
+                    // while entry into the activation zone needs precise GPS.
+                    val definitelyOutside =
+                        distance[0] - location.accuracy >= slot.radiusMeters + 150f
+                    if (location.accuracy <= maxAccuracy ||
+                        (location.accuracy <= 100f && definitelyOutside)
+                    ) {
                         if (sm.processDistance(distance[0], slot.radiusMeters)
                             is StateMachineAction.TriggerCall
                         ) {
