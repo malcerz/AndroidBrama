@@ -2,7 +2,7 @@
 
 **AutoBrama** to inteligentna aplikacja dla systemu Android automatyzująca otwieranie bram wjazdowych, szlabanów i garaży za pomocą połączenia telefonicznego (GSM/CLIP). Aplikacja monitoruje lokalizację GPS w tle i po wjechaniu w zdefiniowany promień automatycznie wybiera numer telefonu przypisany do danej bramy.
 
-Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS **wyłącznie wtedy, gdy telefon jest połączony z samochodem**, zapewniając natychmiastowe otwarcie bramy oraz zerowe zużycie baterii poza pojazdem. Posiada również przełącznik trybu testowego do działania bez auta.
+Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS **wyłącznie wtedy, gdy telefon jest połączony z samochodem**, utrzymując lekki serwis czuwania, który nie pobiera GPS poza pojazdem. Serwis wyświetla powiadomienie także podczas oczekiwania na Android Auto. Posiada również przełącznik trybu testowego do działania bez auta.
 
 ---
 
@@ -32,7 +32,7 @@ Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS
 
 3. **Optymalizacja baterii i detekcja Android Auto:**
    - Wykorzystanie biblioteki `androidx.car.app.connection` (`CarConnection`).
-   - Usługa śledzenia GPS uruchamia się automatycznie w momencie projekcji ekranu w aucie (`CONNECTION_TYPE_PROJECTION`) i natychmiast wyłącza po rozłączeniu.
+   - Po włączeniu automatyzacji aplikacja utrzymuje Foreground Service w stanie czuwania. GPS włącza się przy projekcji (`CONNECTION_TYPE_PROJECTION`) i wyłącza po rozłączeniu. Nie wymaga ponownego uruchamiania usługi z tła po każdym wejściu do auta.
    - **Przełącznik „Wymagaj Android Auto”**: możliwość wyłączenia wymogu samochodu jednym kliknięciem w celu przetestowania działania pieszo lub w emulatorze.
 
 4. **Niezawodna usługa w tle (`Foreground Service`):**
@@ -43,7 +43,7 @@ Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS
 5. **Zabezpieczenie przed pętlą połączeń (Maszyna Stanów + Histereza):**
    - Dedykowana instancja `GateTriggerStateMachine` dla każdego aktywnego slotu.
    - Połączenie telefoniczne wykonywane jest **tylko raz** po wjechaniu w strefę (`dystans <= promień`).
-   - Ponowne wyzwolenie następuje dopiero po opuszczeniu strefy na bezpieczną odległość (`promień + 150 metrów`), co zapobiega powtarzaniu połączeń podczas manewrowania pod bramą.
+   - Ponowne wyzwolenie następuje dopiero po opuszczeniu strefy na bezpieczną odległość (`promień + 150 metrów`), co zapobiega powtarzaniu połączeń podczas manewrowania pod bramą. Po uruchomieniu serwisu wewnątrz strefy trzeba najpierw opuścić ją na odległość `promień + 150m`, aby uzbroić automat.\n  - Gdy kilka stref się nakłada, jedno odświeżenie GPS może zlecić maksymalnie jedno połączenie. Wprowadzono ograniczenie kolejnych prób i kontrolę jakości pozycji GPS.
 
 6. **Nowoczesny interfejs w Jetpack Compose (Material 3):**
    - Reaktywne zakładki dla slotów (`TabRow`).
@@ -76,13 +76,27 @@ com.autobrama.app
 
 ---
 
+## 💾 Eksport i import ustawień
+
+W głównym ekranie wybierz **Eksport JSON**, aby zapisać plik `AndroidBrama-ustawienia.json` przez systemowy wybór dokumentu Android. **Import JSON** pozwala wybrać taki plik, sprawdza jego strukturę i zawartość, a przed zastąpieniem konfiguracji wymaga potwierdzenia.
+
+W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, aktywność poszczególnych bram, a także ustawienie automatyzacji i wymóg Android Auto. Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
+
+## ⚠️ Android 11+ i ograniczenia systemowe
+
+Przyznaj aplikacji dokładną lokalizację oraz (dla niezawodności przy ponownym uruchamianiu z tła) ustaw w uprawnieniach lokalizacji **Zezwalaj zawsze**. Android 12+ i nowsze systemy ograniczają startowanie usług GPS z tła; po ubiciu procesu przez system automatyczne wznowienie nadal może wymagać otwarcia aplikacji. Nie ma gwarancji działania połączenia GSM w każdej konfiguracji systemu i telefonu.
+
+Automatyczne wybieranie numeru wykorzystuje `TelecomManager.placeCall`; poprawne zgłoszenie żądania **nie potwierdza**, że sieć GSM zestawiła połączenie. Zadbaj o uprawnienie `CALL_PHONE`, aktywną kartę SIM i przeprowadź test z zablokowanym ekranem oraz podłączonym Android Auto.
+
+---
+
 ## 🔒 Wymagane uprawnienia
 
 Aplikacja deklaruje w `AndroidManifest.xml` następujące uprawnienia:
 - `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` – precyzyjny odczyt GPS do detekcji strefy bramy.
 - `FOREGROUND_SERVICE` & `FOREGROUND_SERVICE_LOCATION` – działanie w tle z typem lokalizacji.
 - `CALL_PHONE` – automatyczne wykonywanie połączenia telefonicznego pod numer bramy (`Intent.ACTION_CALL`).
-- `POST_NOTIFICATIONS` – wyświetlanie stałego powiadomienia o stanie monitorowania (Android 13+).
+- `POST_NOTIFICATIONS` – wyświetlanie stałego powiadomienia o stanie monitorowania (Android 13+).\n- `ACCESS_BACKGROUND_LOCATION` – opcjonalne uprawnienie do monitorowania i odzyskiwania usługi z tła (wymaga osobnego przyznania w ustawieniach).
 - `INTERNET` & `ACCESS_NETWORK_STATE` – pobieranie kafelków mapy OpenStreetMap.
 
 ---
@@ -101,7 +115,7 @@ Aplikacja deklaruje w `AndroidManifest.xml` następujące uprawnienia:
    ./gradlew test assembleDebug
    ```
 
-2. **Skompilowanie podpisanej wersji Release (APK):**
+2. **Skompilowanie wersji Release (APK; obecnie podpisanej kluczem debug – tylko do testów):**
    ```bash
    ./gradlew assembleRelease
    ```
