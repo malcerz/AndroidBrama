@@ -1,6 +1,8 @@
 package com.autobrama.app.connection
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.car.app.connection.CarConnection
 import androidx.lifecycle.Observer
@@ -8,39 +10,58 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/** -1 means not yet observed; never interpret missing data as a disconnect. */
 object CarConnectionManager {
     private const val TAG = "CarConnectionManager"
+    const val UNKNOWN = -1
 
-    private val _connectionType = MutableStateFlow(CarConnection.CONNECTION_TYPE_NOT_CONNECTED)
+    private val _connectionType = MutableStateFlow(UNKNOWN)
     val connectionType: StateFlow<Int> = _connectionType.asStateFlow()
 
     private var carConnection: CarConnection? = null
     private var observer: Observer<Int>? = null
-    private var isSimulated: Boolean = false
+    private var isSimulated = false
 
     fun init(context: Context) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            Handler(Looper.getMainLooper()).post { init(context) }
+            return
+        }
         if (carConnection != null) return
-
         try {
-            val appCtx = context.applicationContext
-            carConnection = CarConnection(appCtx)
-            observer = Observer<Int> { type ->
-                Log.d(TAG, "CarConnection changed to: $type")
-                if (!isSimulated) {
-                    _connectionType.value = type
-                }
+            val connection = CarConnection(context.applicationContext)
+            val liveObserver = Observer<Int> { state ->
+                if (!isSimulated) _connectionType.value = state
             }
-            carConnection?.type?.observeForever(observer!!)
-            carConnection?.type?.value?.let { current ->
-                if (!isSimulated && current != CarConnection.CONNECTION_TYPE_NOT_CONNECTED) {
-                    _connectionType.value = current
-                }
-            }
+            connection.type.observeForever(liveObserver)
+            carConnection = connection
+            observer = liveObserver
         } catch (e: Exception) {
-            Log.e(TAG, "Error initializing CarConnection", e)
+            Log.e(TAG, "Nie udało się uruchomić nasłuchu Android Auto", e)
+            carConnection = null
+            observer = null
         }
     }
 
+    /** The broadcast is a hint to re-query CarConnection, not a trusted state. */
+    fun refresh(context: Context) {
+        Handler(Looper.getMainLooper()).post {
+            init(context)
+            try {
+                val data = CarConnection(context.applicationContext).type
+                lateinit var oneShot: Observer<Int>
+                oneShot = Observer { state ->
+                    if (!isSimulated) _connectionType.value = state
+                    data.removeObserver(oneShot)
+                }
+                data.observeForever(oneShot)
+            } catch (e: Exception) {
+                Log.e(TAG, "Nie udało się odświeżyć stanu Android Auto", e)
+            }
+        }
+    }
+
+    /** Only for a debug-only UI. Never accept simulation from exported broadcasts. */
     fun updateState(type: Int, simulated: Boolean = false) {
         isSimulated = simulated
         _connectionType.value = type
