@@ -16,8 +16,8 @@ class GateLocationSlotTest {
         assertEquals(3, defaults.size)
 
         assertEquals(1, defaults[0].id)
-        assertTrue(defaults[0].enabled)
-        assertEquals("+48123456789", defaults[0].phoneNumber)
+        assertFalse(defaults[0].enabled)
+        assertEquals("", defaults[0].phoneNumber)
 
         assertEquals(2, defaults[1].id)
         assertFalse(defaults[1].enabled)
