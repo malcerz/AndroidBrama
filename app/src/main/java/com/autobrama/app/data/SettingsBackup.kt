@@ -65,11 +65,8 @@ data class SettingsBackup(
                         "Odległość aktywacji musi wynosić 20–500 m."
                     }
                     require(slot.phoneNumber.isEmpty() ||
-                            slot.phoneNumber.matches(Regex("^\\+?[0-9*#]{1,20}$"))) {
+                            slot.phoneNumber.matches(Regex("^\\+?[0-9*# ()-]{1,30}$"))) {
                         "Nieprawidłowy numer telefonu."
-                    }
-                    require(!slot.enabled || slot.phoneNumber.isNotBlank()) {
-                        "Włączona brama musi mieć numer telefonu."
                     }
                     slot
                 }
