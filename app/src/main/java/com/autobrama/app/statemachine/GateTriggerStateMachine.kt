@@ -22,8 +22,11 @@ sealed class StateMachineAction {
 }
 
 class GateTriggerStateMachine(
-    private val hysteresisOffsetMeters: Float = 150.0f
+    private val hysteresisOffsetMeters: Float = 150.0f,
+    private val requireOutsideBeforeFirstTrigger: Boolean = false
 ) {
+    private var initialFixArmed: Boolean = !requireOutsideBeforeFirstTrigger
+
     var currentState: GateZoneState = GateZoneState.OUTSIDE_ZONE
         private set
 
@@ -37,6 +40,15 @@ class GateTriggerStateMachine(
         currentState = GateZoneState.OUTSIDE_ZONE
         hasTriggeredInSession = false
         lastTriggerDistance = null
+        initialFixArmed = !requireOutsideBeforeFirstTrigger
+    }
+
+    /** Allows a controlled retry after Telecom rejects a dial request. */
+    fun rearmAfterFailedCall() {
+        currentState = GateZoneState.OUTSIDE_ZONE
+        hasTriggeredInSession = false
+        lastTriggerDistance = null
+        initialFixArmed = true
     }
 
     /**
@@ -46,6 +58,23 @@ class GateTriggerStateMachine(
     @Synchronized
     fun processDistance(distance: Float, radiusMeters: Float): StateMachineAction {
         val hysteresisThreshold = radiusMeters + hysteresisOffsetMeters
+
+        // A fresh service starting inside the gate must not dial just because
+        // Android restarted the app. Require a verified departure first.
+        if (!initialFixArmed) {
+            if (distance >= hysteresisThreshold) {
+                initialFixArmed = true
+                currentState = GateZoneState.OUTSIDE_ZONE
+            } else {
+                currentState = GateZoneState.HYSTERESIS_COOLDOWN
+                return StateMachineAction.NoAction(
+                    currentState = currentState,
+                    distance = distance,
+                    radiusMeters = radiusMeters,
+                    reason = "Czekam na wyjazd poza strefę histerezy po uruchomieniu."
+                )
+            }
+        }
 
         return when (currentState) {
             GateZoneState.OUTSIDE_ZONE -> {
