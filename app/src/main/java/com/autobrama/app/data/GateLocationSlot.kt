@@ -41,8 +41,8 @@ data class GateLocationSlot(
             GateLocationSlot(
                 id = 1,
                 name = "Brama 1 (Dom)",
-                enabled = true,
-                phoneNumber = "+48123456789",
+                enabled = false,
+                phoneNumber = "",
                 latitude = 52.2297,
                 longitude = 21.0122,
                 radiusMeters = 50.0f
