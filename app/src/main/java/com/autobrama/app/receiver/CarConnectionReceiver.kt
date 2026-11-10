@@ -10,77 +10,48 @@ import com.autobrama.app.data.PreferencesManager
 import com.autobrama.app.service.AutoCallForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+/**
+ * Android Auto broadcast is only a change hint, not an authoritative connection
+ * state. External extras are deliberately ignored to prevent spoofed projection.
+ */
 class CarConnectionReceiver : BroadcastReceiver() {
-
     companion object {
         private const val TAG = "CarConnectionReceiver"
-        const val EXTRA_SIMULATED_TYPE = "extra_simulated_connection_type"
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
-        val action = intent?.action
-        Log.i(TAG, "Otrzymano broadcast: action=$action")
+        if (intent?.action != CarConnection.ACTION_CAR_CONNECTION_UPDATED) return
+        CarConnectionManager.init(context)
+        CarConnectionManager.refresh(context)
 
-        if (action == CarConnection.ACTION_CAR_CONNECTION_UPDATED ||
-            action == "androidx.car.app.connection.action.CAR_CONNECTION_UPDATED"
-        ) {
-            val pendingResult = goAsync()
-
-            val simulatedType = intent.getIntExtra(EXTRA_SIMULATED_TYPE, -1)
-            val connectionType: Int
-            if (simulatedType != -1) {
-                connectionType = simulatedType
-                CarConnectionManager.updateState(connectionType, simulated = true)
-            } else {
-                connectionType = try {
-                    CarConnection(context).type.value ?: CarConnection.CONNECTION_TYPE_NOT_CONNECTED
-                } catch (e: Exception) {
-                    Log.e(TAG, "Nie można odczytać CarConnection.type", e)
-                    CarConnection.CONNECTION_TYPE_NOT_CONNECTED
+        // A running standby service observes changes directly. This is a best
+        // effort recovery path if Android stopped it; background starts can be
+        // refused by the OS on recent Android versions.
+        val pending = goAsync()
+        val appContext = context.applicationContext
+        CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
+            try {
+                delay(1200) // wait for the asynchronous CarConnection query
+                val enabled = withContext(Dispatchers.IO) {
+                    PreferencesManager(appContext).isAutomationEnabled()
                 }
-                CarConnectionManager.updateState(connectionType, simulated = false)
-            }
-
-            Log.i(TAG, "Wykryty stan połączenia: $connectionType")
-
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val prefs = PreferencesManager(context)
-                    val isAutomationEnabled = prefs.isAutomationEnabled()
-                    val requireAA = prefs.isAndroidAutoRequired()
-
-                    when (connectionType) {
-                        CarConnection.CONNECTION_TYPE_PROJECTION -> {
-                            Log.i(TAG, "Stan: CONNECTION_TYPE_PROJECTION (Android Auto aktywne)")
-                            if (isAutomationEnabled) {
-                                Log.i(TAG, "Automatyzacja włączona w DataStore -> Uruchamianie AutoCallForegroundService")
-                                AutoCallForegroundService.startService(context)
-                            } else {
-                                Log.i(TAG, "Automatyzacja wyłączona w DataStore -> Brak akcji")
-                            }
-                        }
-
-                        CarConnection.CONNECTION_TYPE_NOT_CONNECTED -> {
-                            Log.i(TAG, "Stan: CONNECTION_TYPE_NOT_CONNECTED, requireAA=$requireAA")
-                            if (requireAA) {
-                                Log.i(TAG, "Wymagane Android Auto -> Zatrzymywanie AutoCallForegroundService")
-                                AutoCallForegroundService.stopService(context)
-                            } else {
-                                Log.i(TAG, "Android Auto niewymagane (tryb bez auta) -> Serwis pozostaje aktywny")
-                            }
-                        }
-
-                        else -> {
-                            Log.d(TAG, "Stan połączenia: $connectionType (inny niż PROJECTION lub NOT_CONNECTED)")
-                        }
+                if (enabled && !AutoCallForegroundService.isRunning.value &&
+                    CarConnectionManager.connectionType.value == CarConnection.CONNECTION_TYPE_PROJECTION
+                ) {
+                    val requested = AutoCallForegroundService.startService(appContext)
+                    if (!requested) {
+                        Log.w(TAG, "Android odmówił uruchomienia usługi z tła. Otwórz aplikację.")
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Błąd w CarConnectionReceiver", e)
-                } finally {
-                    pendingResult.finish()
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Błąd obsługi zmiany Android Auto", e)
+            } finally {
+                pending.finish()
             }
         }
     }
