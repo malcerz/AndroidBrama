@@ -94,13 +94,11 @@ fun MapPickerDialog(
             fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
                 .addOnSuccessListener { loc ->
                     if (loc != null) {
-                        selectedLat = loc.latitude
-                        selectedLon = loc.longitude
+                        // Centrowanie kamery NIE zmienia zapisanej pozycji bramy.
                         mapViewRef?.let { map ->
                             val pt = GeoPoint(loc.latitude, loc.longitude)
                             map.controller.setZoom(18.0)
                             map.controller.animateTo(pt)
-                            updateMapOverlays(loc.latitude, loc.longitude, currentRadius, map)
                         }
                     }
                 }
