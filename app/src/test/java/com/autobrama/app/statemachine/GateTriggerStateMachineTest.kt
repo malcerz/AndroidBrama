@@ -102,4 +102,27 @@ class GateTriggerStateMachineTest {
         assertEquals(GateZoneState.OUTSIDE_ZONE, stateMachine.currentState)
         assertFalse(stateMachine.hasTriggeredInSession)
     }
+    @Test
+    fun startupInsideGateDoesNotDialUntilVehicleLeavesAndReturns() {
+        val safe = GateTriggerStateMachine(
+            hysteresisOffsetMeters = 150f,
+            requireOutsideBeforeFirstTrigger = true
+        )
+        assertTrue(safe.processDistance(15f, radius) is StateMachineAction.NoAction)
+        assertTrue(safe.processDistance(80f, radius) is StateMachineAction.NoAction)
+        assertTrue(safe.processDistance(30f, radius) is StateMachineAction.NoAction)
+        assertEquals(GateZoneState.HYSTERESIS_COOLDOWN, safe.currentState)
+        assertTrue(safe.processDistance(210f, radius) is StateMachineAction.NoAction)
+        assertTrue(safe.processDistance(45f, radius) is StateMachineAction.TriggerCall)
+    }
+
+    @Test
+    fun failedDialCanBeRearmedWithoutAnExtraGeofenceDeparture() {
+        val safe = GateTriggerStateMachine(requireOutsideBeforeFirstTrigger = true)
+        safe.processDistance(300f, radius)
+        assertTrue(safe.processDistance(40f, radius) is StateMachineAction.TriggerCall)
+        safe.rearmAfterFailedCall()
+        assertTrue(safe.processDistance(40f, radius) is StateMachineAction.TriggerCall)
+    }
+
 }
