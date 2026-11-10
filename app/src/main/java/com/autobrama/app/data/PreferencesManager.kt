@@ -108,6 +108,24 @@ class PreferencesManager(private val context: Context) {
         setSlots(currentSlots)
     }
 
+    suspend fun exportSettingsJson(): String = SettingsBackup(
+        automationEnabled = isAutomationEnabled(),
+        requireAndroidAuto = isAndroidAutoRequired(),
+        slots = getSlots()
+    ).toJson()
+
+    /** Atomic replacement of all portable settings after complete validation. */
+    suspend fun importSettings(backup: SettingsBackup) {
+        // Revalidate the in-memory backup as well as files loaded from storage.
+        val safe = SettingsBackup.parse(backup.toJson())
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SLOTS_JSON] = GateLocationSlot.listToJson(safe.slots)
+            preferences[KEY_AUTOMATION_ENABLED] = safe.automationEnabled
+            preferences[KEY_REQUIRE_ANDROID_AUTO] = safe.requireAndroidAuto
+            preferences[KEY_LAST_CALL_TIMESTAMP] = 0L
+        }
+    }
+
     suspend fun setSlots(slots: List<GateLocationSlot>) {
         context.dataStore.edit { preferences ->
             preferences[KEY_SLOTS_JSON] = GateLocationSlot.listToJson(slots)

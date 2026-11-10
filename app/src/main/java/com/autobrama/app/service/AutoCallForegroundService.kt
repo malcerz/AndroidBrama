@@ -2,6 +2,7 @@ package com.autobrama.app.service
 
 import android.Manifest
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
@@ -11,13 +12,16 @@ import android.content.pm.ServiceInfo
 import android.location.Location
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
+import android.telecom.TelecomManager
 import android.util.Log
 import androidx.car.app.connection.CarConnection
-import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.autobrama.app.AutoBramaApplication
 import com.autobrama.app.R
 import com.autobrama.app.connection.CarConnectionManager
@@ -41,7 +45,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class ActiveGateStatus(
     val slot: GateLocationSlot,
@@ -49,90 +56,149 @@ data class ActiveGateStatus(
     val zoneState: GateZoneState
 )
 
+/**
+ * A small foreground standby service stays alive after the user enables automation.
+ * It does not request GPS while Android Auto is disconnected, avoiding an illegal
+ * Android 12+ background service start on the next reconnection.
+ */
 class AutoCallForegroundService : Service() {
-
     companion object {
         private const val TAG = "AutoCallFgService"
+        private const val GLOBAL_CALL_COOLDOWN_MS = 30_000L
+        private const val FAILED_RETRY_COOLDOWN_MS = 60_000L
+        private const val MAX_FIX_AGE_NANOS = 15_000_000_000L
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
-
+        private val _isGpsActive = MutableStateFlow(false)
+        val isGpsActive: StateFlow<Boolean> = _isGpsActive.asStateFlow()
         private val _closestGateStatus = MutableStateFlow<ActiveGateStatus?>(null)
         val closestGateStatus: StateFlow<ActiveGateStatus?> = _closestGateStatus.asStateFlow()
-
         private val _gateStatuses = MutableStateFlow<Map<Int, ActiveGateStatus>>(emptyMap())
         val gateStatuses: StateFlow<Map<Int, ActiveGateStatus>> = _gateStatuses.asStateFlow()
-
-        private val _statusMessage = MutableStateFlow("Inicjalizacja usługi...")
+        private val _statusMessage = MutableStateFlow("Usługa wyłączona")
         val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
-        fun startService(context: Context) {
-            val intent = Intent(context, AutoCallForegroundService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+        /** Returns whether Android accepted the start request, not whether tracking started. */
+        fun startService(context: Context): Boolean {
+            if (ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.ACCESS_FINE_LOCATION
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                _statusMessage.value = "Brak dokładnej lokalizacji. Przyznaj uprawnienie GPS."
+                return false
+            }
+            return try {
+                ContextCompat.startForegroundService(
+                    context, Intent(context, AutoCallForegroundService::class.java)
+                )
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "System zablokował uruchomienie usługi", e)
+                _statusMessage.value =
+                    "Android zablokował uruchomienie w tle. Otwórz AutoBrama i włącz automatyzację."
+                false
             }
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, AutoCallForegroundService::class.java)
-            context.stopService(intent)
+            context.stopService(Intent(context, AutoCallForegroundService::class.java))
         }
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val locationMutex = Mutex()
     private lateinit var preferencesManager: PreferencesManager
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
-
-    // Niezależne maszyny stanów dla każdego z 3 slotów
+    private var locationListening = false
     private val stateMachines = mutableMapOf<Int, GateTriggerStateMachine>()
+    private val failedRetryAfter = mutableMapOf<Int, Long>()
+    private var localLastCallAt = 0L
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "onCreate: Tworzenie usługi AutoCallForegroundService (3 sloty)")
         preferencesManager = PreferencesManager(applicationContext)
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        CarConnectionManager.init(applicationContext)
+
+        try {
+            startAsForeground("Uruchamianie monitorowania...")
+        } catch (e: Exception) {
+            Log.e(TAG, "Nie można uruchomić Foreground Service", e)
+            _statusMessage.value = "Brak uprawnień do uruchomienia monitorowania."
+            stopSelf()
+            return
+        }
         _isRunning.value = true
-        stateMachines.clear()
-
-        startAsForeground("Połączono z Android Auto – monitorowanie stref...")
-
-        setupCarConnectionMonitoring()
-        startLocationUpdates()
+        observeAutomation()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand: AutoCallForegroundService uruchomiony")
+        // A restarted service must still respect the persisted automation switch.
         return START_STICKY
     }
 
+    private fun observeAutomation() {
+        serviceScope.launch {
+            combine(
+                preferencesManager.isAutomationEnabledFlow,
+                preferencesManager.requireAndroidAutoFlow,
+                CarConnectionManager.connectionType,
+                preferencesManager.slotsFlow
+            ) { enabled, requireAA, carType, slots ->
+                MonitorConfig(enabled, requireAA, carType, slots)
+            }.collect { config ->
+                if (!config.enabled) {
+                    stopLocationUpdates()
+                    stopSelf()
+                    return@collect
+                }
+                val activeSlots = config.slots.any { it.enabled && it.phoneNumber.isNotBlank() }
+                val allowedByCar = !config.requireAA ||
+                    config.carType == CarConnection.CONNECTION_TYPE_PROJECTION
+
+                if (!allowedByCar) {
+                    stopLocationUpdates()
+                    val reason = if (config.carType == CarConnectionManager.UNKNOWN)
+                        "Ustalanie stanu Android Auto – GPS wyłączony"
+                    else "Czekam na Android Auto – GPS wyłączony"
+                    updateNotification(reason)
+                } else if (!activeSlots) {
+                    stopLocationUpdates()
+                    updateNotification("Brak skonfigurowanych aktywnych bram – GPS wyłączony")
+                } else {
+                    startLocationUpdates()
+                }
+            }
+        }
+    }
+
+    private data class MonitorConfig(
+        val enabled: Boolean,
+        val requireAA: Boolean,
+        val carType: Int,
+        val slots: List<GateLocationSlot>
+    )
+
     private fun startAsForeground(contentText: String) {
-        val notification = buildNotification(contentText)
         val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-        } else {
-            0
-        }
+        } else 0
         ServiceCompat.startForeground(
-            this,
-            AutoBramaApplication.NOTIFICATION_ID,
-            notification,
-            foregroundType
+            this, AutoBramaApplication.NOTIFICATION_ID,
+            buildNotification(contentText), foregroundType
         )
     }
 
     private fun buildNotification(contentText: String): Notification {
         val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
+            this, 0,
             Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-
         return NotificationCompat.Builder(this, AutoBramaApplication.CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("AutoBrama")
@@ -144,157 +210,180 @@ class AutoCallForegroundService : Service() {
             .build()
     }
 
-    private fun updateNotification(contentText: String) {
-        _statusMessage.value = contentText
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        notificationManager.notify(AutoBramaApplication.NOTIFICATION_ID, buildNotification(contentText))
-    }
-
-    private fun setupCarConnectionMonitoring() {
-        serviceScope.launch {
-            combine(
-                CarConnectionManager.connectionType,
-                preferencesManager.requireAndroidAutoFlow
-            ) { connectionType, requireAA ->
-                Pair(connectionType, requireAA)
-            }.collect { (connectionType, requireAA) ->
-                Log.d(TAG, "Stan CarConnection w usłudze: $connectionType (wymagane AA: $requireAA)")
-                if (requireAA && connectionType == CarConnection.CONNECTION_TYPE_NOT_CONNECTED && _isRunning.value) {
-                    Log.i(TAG, "Android Auto rozłączone i wymagane – zatrzymywanie usługi AutoCallForegroundService")
-                    stopSelf()
-                }
-            }
+    private fun updateNotification(text: String) {
+        _statusMessage.value = text
+        try {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.notify(AutoBramaApplication.NOTIFICATION_ID, buildNotification(text))
+        } catch (e: Exception) {
+            Log.w(TAG, "Nie można uaktualnić powiadomienia", e)
         }
     }
 
     private fun startLocationUpdates() {
-        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3000L).apply {
-            setMinUpdateIntervalMillis(2000L)
-            setWaitForAccurateLocation(false)
-        }.build()
-
+        if (locationListening) return
+        if (ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            updateNotification("Brak dokładnej lokalizacji – GPS wyłączony")
+            return
+        }
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3000L)
+            .setMinUpdateIntervalMillis(2000L)
+            .setWaitForAccurateLocation(false)
+            .build()
         locationCallback = object : LocationCallback() {
-            override fun onLocationResult(locationResult: LocationResult) {
-                val location = locationResult.lastLocation ?: return
-                onNewLocation(location)
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let { onNewLocation(it) }
             }
         }
-
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            fusedLocationClient.requestLocationUpdates(
-                locationRequest,
-                locationCallback,
-                Looper.getMainLooper()
-            )
-            Log.i(TAG, "Rozpoczęto odczyt lokalizacji co 3s dla aktywnych slotów bram")
-        } else {
-            Log.w(TAG, "Brak uprawnień ACCESS_FINE_LOCATION!")
-            updateNotification("Brak uprawnień lokalizacji!")
+        try {
+            fusedLocationClient.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+            locationListening = true
+            _isGpsActive.value = true
+            updateNotification("GPS aktywny – monitoruję strefy bram")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Odmowa odczytu lokalizacji", e)
+            updateNotification("Brak dostępu do GPS – sprawdź uprawnienia")
         }
+    }
+
+    private fun stopLocationUpdates() {
+        if (locationListening) {
+            try {
+                fusedLocationClient.removeLocationUpdates(locationCallback)
+            } catch (e: Exception) {
+                Log.w(TAG, "Nie udało się zatrzymać GPS", e)
+            }
+        }
+        locationListening = false
+        _isGpsActive.value = false
+        _closestGateStatus.value = null
+        _gateStatuses.value = emptyMap()
     }
 
     private fun onNewLocation(location: Location) {
         serviceScope.launch {
-            val allSlots = preferencesManager.getSlots()
-            val activeSlots = allSlots.filter { it.enabled && it.phoneNumber.isNotBlank() }
-            val requireAA = preferencesManager.isAndroidAutoRequired()
-            val prefix = if (requireAA) "Połączono z Android Auto" else "AutoBrama (tryb bez auta)"
-
-            if (activeSlots.isEmpty()) {
-                updateNotification("$prefix – brak aktywnych bram")
-                _closestGateStatus.value = null
-                _gateStatuses.value = emptyMap()
-                return@launch
-            }
-
-            val currentStatuses = mutableMapOf<Int, ActiveGateStatus>()
-            var callTriggeredThisTick = false
-
-            for (slot in activeSlots) {
-                val distanceResults = FloatArray(1)
-                Location.distanceBetween(
-                    location.latitude,
-                    location.longitude,
-                    slot.latitude,
-                    slot.longitude,
-                    distanceResults
-                )
-                val distance = distanceResults[0]
-
-                // Pobierz lub utwórz niezależną maszynę stanów dla tego slotu
-                val sm = stateMachines.getOrPut(slot.id) {
-                    GateTriggerStateMachine(hysteresisOffsetMeters = 150.0f)
+            locationMutex.withLock {
+                if (!locationListening || !location.hasAccuracy()) return@withLock
+                val ageNanos = SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
+                if (ageNanos < 0 || ageNanos > MAX_FIX_AGE_NANOS) {
+                    updateNotification("Nieaktualna pozycja GPS – czekam na nową")
+                    return@withLock
                 }
 
-                val action = sm.processDistance(distance, slot.radiusMeters)
-                currentStatuses[slot.id] = ActiveGateStatus(slot, distance, sm.currentState)
-
-                if (action is StateMachineAction.TriggerCall) {
-                    callTriggeredThisTick = true
-                    Log.i(TAG, "Wjazd w strefę slotu ${slot.name}! Dystans: ${distance.toInt()} m, promień: ${slot.radiusMeters} m")
-                    updateNotification("$prefix – wykonano połączenie: ${slot.name}!")
-                    makeGateCall(slot.phoneNumber, slot.name)
+                val activeSlots = preferencesManager.getSlots().filter {
+                    it.enabled && it.phoneNumber.isNotBlank()
                 }
-            }
+                val activeIds = activeSlots.map { it.id }.toSet()
+                stateMachines.keys.retainAll(activeIds)
+                failedRetryAfter.keys.retainAll(activeIds)
+                if (activeSlots.isEmpty()) {
+                    updateNotification("Brak aktywnych bram")
+                    _closestGateStatus.value = null
+                    _gateStatuses.value = emptyMap()
+                    return@withLock
+                }
 
-            _gateStatuses.value = currentStatuses
-            val closest = currentStatuses.values.minByOrNull { it.distanceMeters }
-            _closestGateStatus.value = closest
+                val statuses = mutableMapOf<Int, ActiveGateStatus>()
+                val triggerCandidates = mutableListOf<Pair<GateLocationSlot, Float>>()
+                var poorAccuracy = false
+                for (slot in activeSlots) {
+                    val distance = FloatArray(1)
+                    Location.distanceBetween(
+                        location.latitude, location.longitude,
+                        slot.latitude, slot.longitude, distance
+                    )
+                    val sm = stateMachines.getOrPut(slot.id) {
+                        GateTriggerStateMachine(
+                            hysteresisOffsetMeters = 150f,
+                            requireOutsideBeforeFirstTrigger = true
+                        )
+                    }
+                    // Never advance zone state on a coarse or uncertain fix.
+                    val maxAccuracy = minOf(50f, maxOf(15f, slot.radiusMeters / 2f))
+                    // A coarse fix far outside a gate is safe for arming,
+                    // while entry into the activation zone needs precise GPS.
+                    val definitelyOutside =
+                        distance[0] - location.accuracy >= slot.radiusMeters + 150f
+                    if (location.accuracy <= maxAccuracy ||
+                        (location.accuracy <= 100f && definitelyOutside)
+                    ) {
+                        if (sm.processDistance(distance[0], slot.radiusMeters)
+                            is StateMachineAction.TriggerCall
+                        ) {
+                            triggerCandidates.add(slot to distance[0])
+                        }
+                    } else {
+                        poorAccuracy = true
+                    }
+                    statuses[slot.id] = ActiveGateStatus(slot, distance[0], sm.currentState)
+                }
+                _gateStatuses.value = statuses
+                val closest = statuses.values.minByOrNull { it.distanceMeters }
+                _closestGateStatus.value = closest
 
-            if (!callTriggeredThisTick && closest != null) {
-                val notifText = "$prefix – najbliżej: ${closest.slot.name} (${closest.distanceMeters.toInt()} m)"
-                updateNotification(notifText)
+                // Deliberately choose one closest gate if several zones overlap.
+                // Other state machines remain triggered until their hysteresis exit.
+                val selected = triggerCandidates.minByOrNull { it.second }
+                if (selected != null) {
+                    val (slot, distance) = selected
+                    val now = System.currentTimeMillis()
+                    val lastCall = maxOf(localLastCallAt, preferencesManager.lastCallTimestampFlow.first())
+                    val retryAfter = failedRetryAfter[slot.id] ?: 0L
+                    val globalCooldown = lastCall > 0 && now - lastCall in 0 until GLOBAL_CALL_COOLDOWN_MS
+                    if (globalCooldown) {
+                        Log.i(TAG, "Wstrzymano połączenie z powodu globalnego limitu 30 s")
+                    } else if (now < retryAfter) {
+                        stateMachines[slot.id]?.rearmAfterFailedCall()
+                    } else if (placeGateCall(slot.phoneNumber, slot.name)) {
+                        localLastCallAt = now
+                        failedRetryAfter.remove(slot.id)
+                        preferencesManager.setLastCallTimestamp(now)
+                        updateNotification("Wysłano żądanie połączenia: ${slot.name} (${distance.toInt()} m)")
+                    } else {
+                        failedRetryAfter[slot.id] = now + FAILED_RETRY_COOLDOWN_MS
+                        stateMachines[slot.id]?.rearmAfterFailedCall()
+                        updateNotification("Nie udało się zadzwonić: ${slot.name}; kolejna próba za 60 s")
+                    }
+                } else if (closest != null) {
+                    updateNotification(
+                        if (poorAccuracy) "GPS niedokładny – czekam na lepszy sygnał"
+                        else "Najbliżej: ${closest.slot.name} (${closest.distanceMeters.toInt()} m)"
+                    )
+                }
             }
         }
     }
 
-    private fun makeGateCall(phoneNumber: String, gateName: String) {
-        if (phoneNumber.isBlank()) {
-            Log.w(TAG, "Nie można wykonać połączenia dla $gateName – pusty numer")
-            return
+    /** true = request sent to Telecom; it does not prove that the call connected. */
+    private fun placeGateCall(phoneNumber: String, gateName: String): Boolean {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.e(TAG, "Brak CALL_PHONE dla bramy $gateName")
+            return false
         }
-
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            Log.e(TAG, "Brak uprawnienia CALL_PHONE do wykonania połączenia do $gateName ($phoneNumber)")
-            return
-        }
-
-        try {
-            val callIntent = Intent(Intent.ACTION_CALL).apply {
-                data = Uri.parse("tel:$phoneNumber")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            startActivity(callIntent)
-            Log.i(TAG, "Wywołano Intent.ACTION_CALL pod numer: $phoneNumber ($gateName)")
-
-            serviceScope.launch {
-                preferencesManager.setLastCallTimestamp(System.currentTimeMillis())
-            }
+        return try {
+            val telecom = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+            telecom.placeCall(Uri.fromParts("tel", phoneNumber, null), Bundle())
+            Log.i(TAG, "Żądanie połączenia przekazane do Telecom: $gateName")
+            true
         } catch (e: Exception) {
-            Log.e(TAG, "Błąd podczas wywoływania Intent.ACTION_CALL dla $gateName", e)
+            Log.e(TAG, "Telecom odrzucił żądanie połączenia: $gateName", e)
+            false
         }
     }
 
     override fun onDestroy() {
-        super.onDestroy()
-        Log.d(TAG, "onDestroy: AutoCallForegroundService zatrzymany")
-        _isRunning.value = false
-        _closestGateStatus.value = null
-        _gateStatuses.value = emptyMap()
-        _statusMessage.value = "Usługa zatrzymana"
-
-        try {
-            fusedLocationClient.removeLocationUpdates(locationCallback)
-        } catch (e: Exception) {
-            Log.e(TAG, "Błąd podczas removeLocationUpdates", e)
-        }
-
+        stopLocationUpdates()
         stateMachines.clear()
+        failedRetryAfter.clear()
+        _isRunning.value = false
+        _statusMessage.value = "Usługa zatrzymana"
         serviceScope.cancel()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -1,6 +1,13 @@
 package com.autobrama.app.ui
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import com.autobrama.app.BuildConfig
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -75,6 +82,8 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
     val lastCallTimestamp by viewModel.lastCallTimestamp.collectAsState()
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
+    val isGpsActive by viewModel.isGpsActive.collectAsState()
+    val pendingImport by viewModel.pendingImport.collectAsState()
     val closestGateStatus by viewModel.closestGateStatus.collectAsState()
     val gateStatuses by viewModel.gateStatuses.collectAsState()
     val carConnectionType by viewModel.carConnectionType.collectAsState()
@@ -119,6 +128,58 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
             viewModel.clearUserMessage()
         }
+    }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> uri?.let { viewModel.exportSettingsToUri(context, it) } }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.previewImportFromUri(context, it) } }
+
+    pendingImport?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelImport() },
+            title = { Text("Zastąpić ustawienia?") },
+            text = {
+                Text(
+                    "Import zastąpi konfigurację wszystkich 3 bram (lokalizacje, numery, odległości) " +
+                    "oraz ustawienia automatyzacji i Android Auto.\\n\\n" +
+                    "Automatyzacja po imporcie: " +
+                    (if (backup.automationEnabled) "WŁĄCZONA" else "WYŁĄCZONA") +
+                    ". Potwierdzasz?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmImport(context) }) { Text("Importuj") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelImport() }) { Text("Anuluj") }
+            }
+        )
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var hasBackgroundLocation by remember {
+        mutableStateOf(
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasBackgroundLocation = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                    ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Dialog wyboru lokalizacji na mapie
@@ -296,8 +357,8 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     ) {
                         Text("Foreground Service:", style = MaterialTheme.typography.bodyMedium)
                         BadgeBox(
-                            text = if (isServiceRunning) "DZIAŁA (GPS 3s)" else "ZATRZYMANY",
-                            backgroundColor = if (isServiceRunning) Color(0xFF2196F3) else Color(0xFF9E9E9E)
+                            text = if (isGpsActive) "GPS AKTYWNY" else if (isServiceRunning) "CZUWA (GPS OFF)" else "ZATRZYMANY",
+                            backgroundColor = if (isGpsActive) Color(0xFF2196F3) else if (isServiceRunning) Color(0xFF00897B) else Color(0xFF9E9E9E)
                         )
                     }
 
@@ -432,6 +493,72 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                 }
             }
 
+            // KARTA 4: Kopia zapasowa wszystkich ustawień
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Eksport / import ustawień",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "Zapisz lub odtwórz 3 bramy, numery telefonów, współrzędne GPS, " +
+                        "odległości aktywacji, aktywne sloty i tryb Android Auto. " +
+                        "Plik JSON zawiera prywatne dane – nie udostępniaj go publicznie.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            onClick = { exportLauncher.launch("AndroidBrama-ustawienia.json") }
+                        ) { Text("Eksport JSON") }
+                        OutlinedButton(
+                            modifier = Modifier.weight(1f),
+                            onClick = { importLauncher.launch(arrayOf("*/*")) }
+                        ) { Text("Import JSON") }
+                    }
+                }
+            }
+
+            // Dla odzyskiwania usługi z tła Android wymaga osobnego uprawnienia.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasBackgroundLocation) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Lokalizacja w tle",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "Aby umożliwić monitorowanie po zablokowaniu ekranu i poprawić " +
+                            "odzyskiwanie usługi po jej zamknięciu, otwórz uprawnienia aplikacji " +
+                            "i ustaw Lokalizacja → Zezwalaj zawsze (oraz Dokładna lokalizacja). " +
+                            "Android może nadal ograniczać uruchamianie usług z tła.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedButton(onClick = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.fromParts("package", context.packageName, null)
+                                }
+                            )
+                        }) { Text("Otwórz uprawnienia aplikacji") }
+                    }
+                }
+            }
+
+            if (BuildConfig.DEBUG) {
             // KARTA 4: Diagnostyka i symulator dla testów
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -485,6 +612,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     }
                 }
             }
+            } // Tylko kompilacja debug: symulacja Android Auto
         }
     }
 }
