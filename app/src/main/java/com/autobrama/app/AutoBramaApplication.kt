@@ -5,12 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import com.autobrama.app.connection.CarConnectionManager
 
 class AutoBramaApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        CarConnectionManager.init(this)
     }
 
     private fun createNotificationChannels() {
