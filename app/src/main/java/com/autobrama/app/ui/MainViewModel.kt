@@ -1,6 +1,12 @@
 package com.autobrama.app.ui
 
 import android.Manifest
+import android.os.Bundle
+import android.telecom.TelecomManager
+import java.io.ByteArrayOutputStream
+import com.autobrama.app.data.SettingsBackup
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.app.Application
 import android.content.Context
 import android.content.Intent
@@ -40,6 +46,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
     val isServiceRunning: StateFlow<Boolean> = AutoCallForegroundService.isRunning
+    val isGpsActive: StateFlow<Boolean> = AutoCallForegroundService.isGpsActive
     val closestGateStatus: StateFlow<ActiveGateStatus?> = AutoCallForegroundService.closestGateStatus
     val gateStatuses: StateFlow<Map<Int, ActiveGateStatus>> = AutoCallForegroundService.gateStatuses
     val serviceStatusMessage: StateFlow<String> = AutoCallForegroundService.statusMessage
@@ -49,6 +56,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _userMessage = MutableStateFlow<String?>(null)
     val userMessage: StateFlow<String?> = _userMessage.asStateFlow()
 
+    private val _pendingImport = MutableStateFlow<SettingsBackup?>(null)
+    val pendingImport: StateFlow<SettingsBackup?> = _pendingImport.asStateFlow()
+
     init {
         CarConnectionManager.init(application)
     }
@@ -57,19 +67,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _userMessage.value = null
     }
 
-    fun toggleAutomation(enabled: Boolean, context: Context) {
+fun toggleAutomation(enabled: Boolean, context: Context) {
         viewModelScope.launch {
             prefs.setAutomationEnabled(enabled)
             if (enabled) {
-                val requireAA = prefs.isAndroidAutoRequired()
-                if (!requireAA || carConnectionType.value == CarConnection.CONNECTION_TYPE_PROJECTION) {
-                    AutoCallForegroundService.startService(context)
-                    _userMessage.value = if (!requireAA)
-                        "Automatyzacja włączona (tryb bez auta – serwis aktywny)."
-                    else
-                        "Automatyzacja włączona. Wykryto Android Auto – serwis uruchomiony."
+                // Start a lightweight standby FGS from the visible UI. GPS runs
+                // only after Android Auto connects (unless AA is not required).
+                val accepted = AutoCallForegroundService.startService(context)
+                if (!accepted) {
+                    prefs.setAutomationEnabled(false)
+                    _userMessage.value = "Nie uruchomiono usługi. Sprawdź dokładną lokalizację i uprawnienia."
                 } else {
-                    _userMessage.value = "Automatyzacja włączona. Oczekiwanie na połączenie z Android Auto."
+                    _userMessage.value = if (prefs.isAndroidAutoRequired())
+                        "Automatyzacja włączona; GPS oczekuje na Android Auto."
+                    else "Automatyzacja włączona; monitorowanie GPS uruchamiane."
                 }
             } else {
                 AutoCallForegroundService.stopService(context)
@@ -78,27 +89,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
+fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
         viewModelScope.launch {
             prefs.setAndroidAutoRequired(required)
-            if (isAutomationEnabled.value) {
-                if (!required) {
-                    // Tryb testowy bez auta: uruchom natychmiast serwis
-                    AutoCallForegroundService.startService(context)
-                    _userMessage.value = "Tryb bez auta: serwis GPS uruchomiony."
-                } else {
-                    // Wymagane AA: zatrzymaj serwis jeśli nie ma projekcji
-                    if (carConnectionType.value != CarConnection.CONNECTION_TYPE_PROJECTION) {
-                        AutoCallForegroundService.stopService(context)
-                        _userMessage.value = "Wymagane Android Auto: serwis oczekuje na połączenie z autem."
-                    }
-                }
-            } else {
-                _userMessage.value = if (required)
-                    "Sprawdzanie Android Auto: WŁĄCZONE"
-                else
-                    "Sprawdzanie Android Auto: WYŁĄCZONE (tryb bez auta)"
+            if (prefs.isAutomationEnabled() && !isServiceRunning.value) {
+                AutoCallForegroundService.startService(context)
             }
+            _userMessage.value = if (required)
+                "Android Auto wymagane; GPS włączy się tylko przy projekcji."
+            else "Tryb bez auta – GPS aktywny podczas automatyzacji."
         }
     }
 
@@ -116,26 +115,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun testMakeCall(phoneNumber: String, context: Context) {
+fun testMakeCall(phoneNumber: String, context: Context) {
         if (phoneNumber.isBlank()) {
             _userMessage.value = "Numer bramy jest pusty!"
             return
         }
-
         if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
             _userMessage.value = "Brak uprawnienia CALL_PHONE!"
             return
         }
-
         try {
-            val callIntent = Intent(Intent.ACTION_CALL).apply {
-                data = Uri.parse("tel:$phoneNumber")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            context.startActivity(callIntent)
-            _userMessage.value = "Wykonano połączenie testowe pod numer $phoneNumber"
+            val manager = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+            manager.placeCall(Uri.fromParts("tel", phoneNumber, null), Bundle())
+            _userMessage.value = "Wysłano testowe żądanie połączenia."
         } catch (e: Exception) {
-            _userMessage.value = "Błąd wywołania połączenia: ${e.message}"
+            _userMessage.value = "Błąd wybierania numeru: ${e.message}"
         }
     }
 
@@ -149,24 +143,80 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun simulateAndroidAutoConnection(context: Context, connected: Boolean) {
-        val connectionType = if (connected) {
-            CarConnection.CONNECTION_TYPE_PROJECTION
-        } else {
-            CarConnection.CONNECTION_TYPE_NOT_CONNECTED
-        }
-
-        val intent = Intent(CarConnection.ACTION_CAR_CONNECTION_UPDATED).apply {
-            putExtra(CarConnectionReceiver.EXTRA_SIMULATED_TYPE, connectionType)
-            setPackage(context.packageName)
-        }
-        CarConnectionManager.updateState(connectionType, simulated = true)
-        context.sendBroadcast(intent)
-
-        _userMessage.value = if (connected) {
-            "Symulacja: Połączono z Android Auto (PROJECTION)"
-        } else {
-            "Symulacja: Rozłączono Android Auto (NOT_CONNECTED)"
+    fun exportSettingsToUri(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val text = prefs.exportSettingsJson()
+                withContext(Dispatchers.IO) {
+                    val stream = context.contentResolver.openOutputStream(uri)
+                        ?: error("Nie można otworzyć pliku do zapisu.")
+                    stream.bufferedWriter(Charsets.UTF_8).use { it.write(text) }
+                }
+                _userMessage.value = "Ustawienia zapisane do pliku JSON."
+            } catch (e: Exception) {
+                _userMessage.value = "Eksport nieudany: ${e.message}"
+            }
         }
     }
+
+    fun previewImportFromUri(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val json = withContext(Dispatchers.IO) {
+                    val input = context.contentResolver.openInputStream(uri)
+                        ?: error("Nie można odczytać pliku.")
+                    input.use { stream ->
+                        val buffer = ByteArray(4096)
+                        val output = ByteArrayOutputStream()
+                        while (true) {
+                            val count = stream.read(buffer)
+                            if (count < 0) break
+                            require(output.size() + count <= SettingsBackup.MAX_BACKUP_BYTES) {
+                                "Plik konfiguracji jest zbyt duży."
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toString(Charsets.UTF_8.name())
+                    }
+                }
+                _pendingImport.value = SettingsBackup.parse(json)
+            } catch (e: Exception) {
+                _pendingImport.value = null
+                _userMessage.value = "Nie udało się zaimportować: ${e.message}"
+            }
+        }
+    }
+
+    fun cancelImport() {
+        _pendingImport.value = null
+    }
+
+    fun confirmImport(context: Context) {
+        val backup = _pendingImport.value ?: return
+        _pendingImport.value = null
+        viewModelScope.launch {
+            try {
+                // Stop existing tracking before changing all 3 gates.
+                AutoCallForegroundService.stopService(context)
+                prefs.importSettings(backup)
+                val started = if (backup.automationEnabled)
+                    AutoCallForegroundService.startService(context)
+                else true
+                _userMessage.value = if (started) "Zaimportowano 3 bramy i ustawienia automatyzacji."
+                else "Ustawienia zaimportowane, ale usługa nie wystartowała. Sprawdź GPS."
+            } catch (e: Exception) {
+                _userMessage.value = "Import nieudany: ${e.message}"
+            }
+        }
+    }
+
+        fun simulateAndroidAutoConnection(context: Context, connected: Boolean) {
+        val type = if (connected) CarConnection.CONNECTION_TYPE_PROJECTION
+            else CarConnection.CONNECTION_TYPE_NOT_CONNECTED
+        // Developer-only control, not an exported broadcast.
+        CarConnectionManager.updateState(type, simulated = true)
+        _userMessage.value = if (connected) "Symulacja: Android Auto połączone"
+            else "Symulacja: Android Auto rozłączone"
+    }
+
 }
