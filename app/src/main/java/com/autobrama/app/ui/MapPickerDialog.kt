@@ -55,8 +55,10 @@ fun MapPickerDialog(
     var currentRadius by remember(slot.id) { mutableFloatStateOf(slot.radiusMeters) }
     var radiusText by remember(slot.id) { mutableStateOf(slot.radiusMeters.roundToInt().toString()) }
     var hysteresisText by remember(slot.id) { mutableStateOf(slot.hysteresisMeters.roundToInt().toString()) }
-    val radiusValid = radiusText.toIntOrNull() in 20..500
-    val hysteresisValid = hysteresisText.toIntOrNull() in 0..2000
+    val parsedRadius = radiusText.toIntOrNull()
+    val parsedHysteresis = hysteresisText.toIntOrNull()
+    val radiusValid = parsedRadius != null && parsedRadius in 20..500
+    val hysteresisValid = parsedHysteresis != null && parsedHysteresis in 0..2000
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var markerRef by remember { mutableStateOf<Marker?>(null) }
