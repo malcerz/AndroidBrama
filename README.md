@@ -43,7 +43,7 @@ Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS
 5. **Zabezpieczenie przed pętlą połączeń (Maszyna Stanów + Histereza):**
    - Dedykowana instancja `GateTriggerStateMachine` dla każdego aktywnego slotu.
    - Połączenie telefoniczne wykonywane jest **tylko raz** po wjechaniu w strefę (`dystans <= promień`).
-   - Ponowne wyzwolenie następuje dopiero po opuszczeniu strefy na bezpieczną odległość (`promień + 150 metrów`), co zapobiega powtarzaniu połączeń podczas manewrowania pod bramą. Po uruchomieniu serwisu wewnątrz strefy trzeba najpierw opuścić ją na odległość `promień + 150m`, aby uzbroić automat.\n  - Gdy kilka stref się nakłada, jedno odświeżenie GPS może zlecić maksymalnie jedno połączenie. Wprowadzono ograniczenie kolejnych prób i kontrolę jakości pozycji GPS.
+   - Ponowne wyzwolenie następuje dopiero po opuszczeniu strefy na bezpieczną odległość (`promień + 150 metrów`), co zapobiega powtarzaniu połączeń podczas manewrowania pod bramą. Pierwszy poprawny odczyt GPS już wewnątrz promienia może wyzwolić połączenie (np. 15 m przy promieniu 20 m). Po zgłoszeniu połączenia stan bramy zapisywany jest w DataStore i pozostaje zablokowany również po restarcie usługi; ponowne uzbrojenie wymaga opuszczenia strefy na `promień + 150m`. Przy bardzo małym promieniu aplikacja wymaga odpowiednio dokładnego odczytu GPS.\n  - Gdy kilka stref się nakłada, jedno odświeżenie GPS może zlecić maksymalnie jedno połączenie. Wprowadzono ograniczenie kolejnych prób i kontrolę jakości pozycji GPS.
 
 6. **Nowoczesny interfejs w Jetpack Compose (Material 3):**
    - Reaktywne zakładki dla slotów (`TabRow`).
