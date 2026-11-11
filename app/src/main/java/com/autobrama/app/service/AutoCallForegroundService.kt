@@ -279,6 +279,10 @@ class AutoCallForegroundService : Service() {
                 val activeIds = activeSlots.map { it.id }.toSet()
                 stateMachines.keys.retainAll(activeIds)
                 failedRetryAfter.keys.retainAll(activeIds)
+                // Reload on every GPS fix so a process restart retains the
+                // previously triggered gate's hysteresis latch.
+                val savedLatches = preferencesManager.getLatchedGateIds()
+                val nextLatches = savedLatches.toMutableSet()
                 if (activeSlots.isEmpty()) {
                     updateNotification("Brak aktywnych bram")
                     _closestGateStatus.value = null
@@ -296,10 +300,9 @@ class AutoCallForegroundService : Service() {
                         slot.latitude, slot.longitude, distance
                     )
                     val sm = stateMachines.getOrPut(slot.id) {
-                        GateTriggerStateMachine(
-                            hysteresisOffsetMeters = 150f,
-                            requireOutsideBeforeFirstTrigger = true
-                        )
+                        GateTriggerStateMachine(hysteresisOffsetMeters = 150f).apply {
+                            if (slot.id in savedLatches) restoreTriggeredState()
+                        }
                     }
                     // Never advance zone state on a coarse or uncertain fix.
                     val maxAccuracy = minOf(50f, maxOf(15f, slot.radiusMeters / 2f))
@@ -318,40 +321,81 @@ class AutoCallForegroundService : Service() {
                     } else {
                         poorAccuracy = true
                     }
+                    // Only a validated departure beyond radius + 150m
+                    // re-arms a gate that was triggered before restart.
+                    if (sm.currentState == GateZoneState.OUTSIDE_ZONE &&
+                        slot.id in nextLatches
+                    ) {
+                        nextLatches.remove(slot.id)
+                    }
                     statuses[slot.id] = ActiveGateStatus(slot, distance[0], sm.currentState)
                 }
                 _gateStatuses.value = statuses
                 val closest = statuses.values.minByOrNull { it.distanceMeters }
                 _closestGateStatus.value = closest
 
-                // Deliberately choose one closest gate if several zones overlap.
-                // Other state machines remain triggered until their hysteresis exit.
+                // One GPS update can trigger at most one GSM request.
+                // Treat other overlapping zones as triggered too, avoiding
+                // a second call after service restarts.
                 val selected = triggerCandidates.minByOrNull { it.second }
                 if (selected != null) {
                     val (slot, distance) = selected
                     val now = System.currentTimeMillis()
-                    val lastCall = maxOf(localLastCallAt, preferencesManager.lastCallTimestampFlow.first())
+                    val lastCall = maxOf(
+                        localLastCallAt,
+                        preferencesManager.lastCallTimestampFlow.first()
+                    )
                     val retryAfter = failedRetryAfter[slot.id] ?: 0L
-                    val globalCooldown = lastCall > 0 && now - lastCall in 0 until GLOBAL_CALL_COOLDOWN_MS
-                    if (globalCooldown) {
-                        Log.i(TAG, "Wstrzymano połączenie z powodu globalnego limitu 30 s")
-                    } else if (now < retryAfter) {
+                    val globalCooldown =
+                        lastCall > 0 && now - lastCall in 0 until GLOBAL_CALL_COOLDOWN_MS
+                    val overlappingIds = triggerCandidates.map { it.first.id }.toSet()
+
+                    if (now < retryAfter) {
+                        // A rejected request must be retried, not latched
+                        // permanently. Keep other overlapping gates blocked.
+                        nextLatches.addAll(overlappingIds - slot.id)
                         stateMachines[slot.id]?.rearmAfterFailedCall()
-                    } else if (placeGateCall(slot.phoneNumber, slot.name)) {
-                        localLastCallAt = now
-                        failedRetryAfter.remove(slot.id)
-                        preferencesManager.setLastCallTimestamp(now)
-                        updateNotification("Wysłano żądanie połączenia: ${slot.name} (${distance.toInt()} m)")
+                        updateNotification("Oczekiwanie na ponowną próbę połączenia: ${slot.name}")
+                    } else if (globalCooldown) {
+                        nextLatches.addAll(overlappingIds)
+                        Log.i(TAG, "Blokada kolejnego połączenia przez 30 s: ${slot.name}")
+                        updateNotification("Blokada 30 s po innym wyzwoleniu: ${slot.name}")
                     } else {
-                        failedRetryAfter[slot.id] = now + FAILED_RETRY_COOLDOWN_MS
-                        stateMachines[slot.id]?.rearmAfterFailedCall()
-                        updateNotification("Nie udało się zadzwonić: ${slot.name}; kolejna próba za 60 s")
+                        // Persist the latch BEFORE submitting a call: Android
+                        // killing our process must not dial the same gate twice.
+                        nextLatches.addAll(overlappingIds)
+                        if (nextLatches != savedLatches) {
+                            preferencesManager.setLatchedGateIds(nextLatches)
+                        }
+
+                        Log.i(TAG, "Próba połączenia: ${slot.name}, dystans ${distance.toInt()} m, próg ${slot.radiusMeters.toInt()} m")
+                        if (placeGateCall(slot.phoneNumber, slot.name)) {
+                            localLastCallAt = now
+                            failedRetryAfter.remove(slot.id)
+                            preferencesManager.setLastCallTimestamp(now)
+                            updateNotification("Wysłano żądanie połączenia: ${slot.name} (${distance.toInt()} m)")
+                        } else {
+                            failedRetryAfter[slot.id] = now + FAILED_RETRY_COOLDOWN_MS
+                            stateMachines[slot.id]?.rearmAfterFailedCall()
+                            nextLatches.remove(slot.id)
+                            preferencesManager.setLatchedGateIds(nextLatches)
+                            updateNotification("Nie udało się zadzwonić: ${slot.name}; kolejna próba za 60 s")
+                        }
                     }
                 } else if (closest != null) {
-                    updateNotification(
-                        if (poorAccuracy) "GPS niedokładny – czekam na lepszy sygnał"
-                        else "Najbliżej: ${closest.slot.name} (${closest.distanceMeters.toInt()} m)"
-                    )
+                    val status = when {
+                        poorAccuracy -> "GPS niedokładny – czekam na lepszy sygnał"
+                        closest.zoneState == GateZoneState.HYSTERESIS_COOLDOWN ->
+                            "Blokada ponownego połączenia: wyjdź poza ${(closest.slot.radiusMeters + 150f).toInt()} m"
+                        closest.zoneState == GateZoneState.IN_ZONE_TRIGGERED ->
+                            "Brama ${closest.slot.name}: wyzwolenie już obsłużone"
+                        else -> "Najbliżej: ${closest.slot.name} (${closest.distanceMeters.toInt()} m)"
+                    }
+                    updateNotification(status)
+                }
+
+                if (nextLatches != savedLatches) {
+                    preferencesManager.setLatchedGateIds(nextLatches)
                 }
             }
         }
