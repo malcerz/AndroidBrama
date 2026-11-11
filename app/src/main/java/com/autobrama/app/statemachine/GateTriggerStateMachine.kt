@@ -22,8 +22,15 @@ sealed class StateMachineAction {
 }
 
 class GateTriggerStateMachine(
-    private val hysteresisOffsetMeters: Float = 150.0f
+    private var hysteresisOffsetMeters: Float = 150.0f
 ) {
+
+    /** Updates a live gate without discarding its call/exit latch. */
+    @Synchronized
+    fun setHysteresisMeters(value: Float) {
+        require(value.isFinite() && value in 0f..2000f) { "Invalid hysteresis distance" }
+        hysteresisOffsetMeters = value
+    }
 
     var currentState: GateZoneState = GateZoneState.OUTSIDE_ZONE
         private set
