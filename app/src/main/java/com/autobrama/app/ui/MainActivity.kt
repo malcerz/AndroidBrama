@@ -43,6 +43,7 @@ import com.autobrama.app.data.GateLocationSlot
 import com.autobrama.app.statemachine.GateZoneState
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
@@ -188,11 +189,12 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
         MapPickerDialog(
             slot = slotToEdit,
             onDismiss = { slotForMapDialog = null },
-            onConfirm = { newLat, newLon, newRadius ->
+            onConfirm = { newLat, newLon, newRadius, newHysteresis ->
                 val updated = slotToEdit.copy(
                     latitude = newLat,
                     longitude = newLon,
-                    radiusMeters = newRadius
+                    radiusMeters = newRadius,
+                    hysteresisMeters = newHysteresis
                 )
                 viewModel.updateSlot(updated)
                 slotForMapDialog = null
@@ -397,7 +399,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             val stateLabel = when (c.zoneState) {
                                 GateZoneState.OUTSIDE_ZONE -> "Czuwanie (poza strefą)"
                                 GateZoneState.IN_ZONE_TRIGGERED -> "Wyzwolenie obsłużone (blokada)"
-                                GateZoneState.HYSTERESIS_COOLDOWN -> "Histereza (+150m blokada)"
+                                GateZoneState.HYSTERESIS_COOLDOWN -> "Histereza (+${c.slot.hysteresisMeters.toInt()} m blokada)"
                             }
                             Text(
                                 text = stateLabel,
@@ -633,7 +635,16 @@ fun SlotConfigurationForm(
 ) {
     var nameInput by remember(slot.id, slot.name) { mutableStateOf(slot.name) }
     var phoneInput by remember(slot.id, slot.phoneNumber) { mutableStateOf(slot.phoneNumber) }
-    var radiusInput by remember(slot.id, slot.radiusMeters) { mutableFloatStateOf(slot.radiusMeters) }
+    var radiusText by remember(slot.id, slot.radiusMeters) {
+        mutableStateOf(slot.radiusMeters.roundToInt().toString())
+    }
+    var hysteresisText by remember(slot.id, slot.hysteresisMeters) {
+        mutableStateOf(slot.hysteresisMeters.roundToInt().toString())
+    }
+    val radiusValue = radiusText.toIntOrNull()
+    val hysteresisValue = hysteresisText.toIntOrNull()
+    val radiusValid = radiusValue != null && radiusValue in 20..500
+    val hysteresisValid = hysteresisValue != null && hysteresisValue in 0..2000
     var isEnabled by remember(slot.id, slot.enabled) { mutableStateOf(slot.enabled) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -710,26 +721,48 @@ fun SlotConfigurationForm(
             }
         }
 
-        // Suwak promienia strefy
-        Column {
-            Row(
+        // Ręczny wpis co 1 metr, suwak pozostaje ułatwieniem.
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(
+                value = radiusText,
+                onValueChange = { value ->
+                    if (value.length <= 4 && value.all { it.isDigit() }) radiusText = value
+                },
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text("Dystans aktywacji (promień):", fontSize = 12.sp)
-                Text("${radiusInput.toInt()} m", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-            }
+                label = { Text("Dystans aktywacji (promień)") },
+                suffix = { Text("m") },
+                singleLine = true,
+                isError = !radiusValid,
+                supportingText = { Text("Zakres 20–500 m, wpisz dokładną liczbę metrów") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
             Slider(
-                value = radiusInput,
-                onValueChange = { radiusInput = it },
+                value = (radiusValue?.toFloat() ?: slot.radiusMeters).coerceIn(20f, 500f),
+                onValueChange = { radiusText = it.roundToInt().toString() },
                 valueRange = 20f..500f,
                 steps = 47,
                 modifier = Modifier.fillMaxWidth()
             )
+            OutlinedTextField(
+                value = hysteresisText,
+                onValueChange = { value ->
+                    if (value.length <= 4 && value.all { it.isDigit() }) hysteresisText = value
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Histereza dodatkowa") },
+                suffix = { Text("m") },
+                singleLine = true,
+                isError = !hysteresisValid,
+                supportingText = { Text("Zakres 0–2000 m; domyślnie 150 m") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
             Text(
-                text = "Próg histerezy wyjścia: ${(radiusInput + 150).toInt()} m (r + 150m)",
-                fontSize = 11.sp,
-                color = Color.DarkGray
+                text = if (radiusValid && hysteresisValid)
+                    "Ponowne uzbrojenie po oddaleniu na co najmniej ${radiusValue!! + hysteresisValue!!} m (promień + histereza)"
+                else "Wprowadź poprawne odległości, aby zapisać ustawienia.",
+                fontSize = 12.sp,
+                color = if (radiusValid && hysteresisValid) Color.DarkGray
+                    else MaterialTheme.colorScheme.error
             )
         }
 
@@ -739,12 +772,14 @@ fun SlotConfigurationForm(
                 val updated = slot.copy(
                     name = nameInput,
                     phoneNumber = phoneInput,
-                    radiusMeters = radiusInput,
+                    radiusMeters = radiusValue!!.toFloat(),
+                    hysteresisMeters = hysteresisValue!!.toFloat(),
                     enabled = isEnabled
                 )
                 onUpdateSlot(updated)
             },
             modifier = Modifier.fillMaxWidth(),
+            enabled = radiusValid && hysteresisValid,
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
         ) {
             Icon(Icons.Default.Save, contentDescription = null)
