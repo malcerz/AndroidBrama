@@ -10,7 +10,8 @@ data class GateLocationSlot(
     val phoneNumber: String,
     val latitude: Double,
     val longitude: Double,
-    val radiusMeters: Float
+    val radiusMeters: Float,
+    val hysteresisMeters: Float = 150.0f
 ) {
     fun toJsonObject(): JSONObject {
         return JSONObject().apply {
@@ -21,6 +22,7 @@ data class GateLocationSlot(
             put("latitude", latitude)
             put("longitude", longitude)
             put("radiusMeters", radiusMeters.toDouble())
+            put("hysteresisMeters", hysteresisMeters.toDouble())
         }
     }
 
@@ -33,7 +35,8 @@ data class GateLocationSlot(
                 phoneNumber = json.optString("phoneNumber", ""),
                 latitude = json.optDouble("latitude", 52.2297),
                 longitude = json.optDouble("longitude", 21.0122),
-                radiusMeters = json.optDouble("radiusMeters", 50.0).toFloat()
+                radiusMeters = json.optDouble("radiusMeters", 50.0).toFloat(),
+                hysteresisMeters = json.optDouble("hysteresisMeters", 150.0).toFloat()
             )
         }
 

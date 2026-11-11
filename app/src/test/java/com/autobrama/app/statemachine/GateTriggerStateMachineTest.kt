@@ -135,4 +135,42 @@ class GateTriggerStateMachineTest {
         assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
     }
 
+    @Test
+    fun customHysteresisControlsRearmDistance() {
+        // 20 m activation radius + 30 m hysteresis = rearm after 50 m.
+        val machine = GateTriggerStateMachine(hysteresisOffsetMeters = 30f)
+        assertTrue(machine.processDistance(200f, 20f) is StateMachineAction.NoAction)
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
+        assertTrue(machine.processDistance(49f, 20f) is StateMachineAction.NoAction)
+        assertEquals(GateZoneState.HYSTERESIS_COOLDOWN, machine.currentState)
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.NoAction)
+        assertTrue(machine.processDistance(50f, 20f) is StateMachineAction.NoAction)
+        assertEquals(GateZoneState.OUTSIDE_ZONE, machine.currentState)
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
+    }
+
+    @Test
+    fun editingHysteresisDoesNotResetExistingCallLatch() {
+        val machine = GateTriggerStateMachine(hysteresisOffsetMeters = 150f)
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
+        machine.setHysteresisMeters(25f)
+        assertTrue(machine.processDistance(30f, 20f) is StateMachineAction.NoAction)
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.NoAction)
+        assertTrue(machine.processDistance(45f, 20f) is StateMachineAction.NoAction)
+        assertEquals(GateZoneState.OUTSIDE_ZONE, machine.currentState)
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
+    }
+
+    @Test
+    fun independentGatesCanHaveDifferentHysteresis() {
+        val a = GateTriggerStateMachine(hysteresisOffsetMeters = 25f)
+        val b = GateTriggerStateMachine(hysteresisOffsetMeters = 150f)
+        assertTrue(a.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
+        assertTrue(b.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
+        a.processDistance(60f, 20f)
+        b.processDistance(60f, 20f)
+        assertEquals(GateZoneState.OUTSIDE_ZONE, a.currentState)
+        assertEquals(GateZoneState.HYSTERESIS_COOLDOWN, b.currentState)
+    }
+
 }

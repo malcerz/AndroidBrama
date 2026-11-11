@@ -53,7 +53,10 @@ data class SettingsBackup(
                         phoneNumber = item.getString("phoneNumber").trim(),
                         latitude = item.getDouble("latitude"),
                         longitude = item.getDouble("longitude"),
-                        radiusMeters = item.getDouble("radiusMeters").toFloat()
+                        radiusMeters = item.getDouble("radiusMeters").toFloat(),
+                        // Older v1 backups have no hysteresis field.
+                        hysteresisMeters = if (item.has("hysteresisMeters"))
+                            item.getDouble("hysteresisMeters").toFloat() else 150f
                     )
                     require(slot.id in 1..3) { "Nieprawidłowy identyfikator bramy." }
                     require(slot.name.isNotBlank() && slot.name.length <= 100) { "Nieprawidłowa nazwa bramy." }
@@ -63,6 +66,9 @@ data class SettingsBackup(
                     }
                     require(slot.radiusMeters.isFinite() && slot.radiusMeters in 20f..500f) {
                         "Odległość aktywacji musi wynosić 20–500 m."
+                    }
+                    require(slot.hysteresisMeters.isFinite() && slot.hysteresisMeters in 0f..2000f) {
+                        "Histereza musi wynosić 0–2000 m."
                     }
                     require(slot.phoneNumber.isEmpty() ||
                             slot.phoneNumber.matches(Regex("^\\+?[0-9*# ()-]{1,30}$"))) {

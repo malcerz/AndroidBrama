@@ -29,7 +29,7 @@ class GateLocationSlotTest {
     @Test
     fun testJsonSerializationAndDeserialization() {
         val originalSlots = listOf(
-            GateLocationSlot(1, "Dom Główny", true, "+48111222333", 52.1234, 21.4321, 60.0f),
+            GateLocationSlot(1, "Dom Główny", true, "+48111222333", 52.1234, 21.4321, 60.0f, 35f),
             GateLocationSlot(2, "Biuro Tech", true, "+48444555666", 52.5678, 21.8765, 80.0f),
             GateLocationSlot(3, "Domek Letniskowy", false, "+48777888999", 54.1234, 18.4321, 100.0f)
         )
@@ -42,6 +42,7 @@ class GateLocationSlotTest {
         assertEquals("+48111222333", restored[0].phoneNumber)
         assertEquals(52.1234, restored[0].latitude, 0.0001)
         assertEquals(60.0f, restored[0].radiusMeters, 0.01f)
+        assertEquals(35.0f, restored[0].hysteresisMeters, 0.01f)
         assertTrue(restored[0].enabled)
 
         assertEquals("Biuro Tech", restored[1].name)
@@ -49,6 +50,14 @@ class GateLocationSlotTest {
 
         assertEquals("Domek Letniskowy", restored[2].name)
         assertFalse(restored[2].enabled)
+    }
+
+    @Test
+    fun legacySlotWithoutHysteresisDefaultsTo150m() {
+        val data = GateLocationSlot.defaultSlots()[0].toJsonObject()
+        data.remove("hysteresisMeters")
+        val restored = GateLocationSlot.fromJsonObject(data)
+        assertEquals(150f, restored.hysteresisMeters, 0.01f)
     }
 
     @Test
