@@ -21,7 +21,7 @@ Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS
      - Własną edytowalną nazwę (np. *Dom*, *Firma*, *Działka*),
      - Dedykowany numer telefonu z przyciskiem szybkiego testu połączenia,
      - Indywidualne współrzędne geograficzne (szerokość i długość),
-     - Niezależny suwak promienia aktywacji (od 20 m do 500 m),
+     - Niezależne pole ręcznego wpisu promienia aktywacji (20–500 m, co 1 m) i opcjonalny suwak,\n     - Ręcznie ustawiana histereza dla każdej bramy (0–2000 m, domyślnie 150 m),
      - Przełącznik aktywności slotu.
 
 2. **Interaktywny wybór na mapie (OpenStreetMap / `osmdroid`):**
@@ -43,7 +43,8 @@ Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS
 5. **Zabezpieczenie przed pętlą połączeń (Maszyna Stanów + Histereza):**
    - Dedykowana instancja `GateTriggerStateMachine` dla każdego aktywnego slotu.
    - Połączenie telefoniczne wykonywane jest **tylko raz** po wjechaniu w strefę (`dystans <= promień`).
-   - Ponowne wyzwolenie następuje dopiero po opuszczeniu strefy na bezpieczną odległość (`promień + 150 metrów`), co zapobiega powtarzaniu połączeń podczas manewrowania pod bramą. Pierwszy poprawny odczyt GPS już wewnątrz promienia może wyzwolić połączenie (np. 15 m przy promieniu 20 m). Po zgłoszeniu połączenia stan bramy zapisywany jest w DataStore i pozostaje zablokowany również po restarcie usługi; ponowne uzbrojenie wymaga opuszczenia strefy na `promień + 150m`. Przy bardzo małym promieniu aplikacja wymaga odpowiednio dokładnego odczytu GPS.\n  - Gdy kilka stref się nakłada, jedno odświeżenie GPS może zlecić maksymalnie jedno połączenie. Wprowadzono ograniczenie kolejnych prób i kontrolę jakości pozycji GPS.
+   - Ponowne wyzwolenie następuje dopiero po opuszczeniu strefy na odległość `promień + ustawiona histereza` (domyślnie +150 m), co zapobiega powtarzaniu połączeń podczas manewrowania pod bramą. Pierwszy poprawny odczyt GPS już wewnątrz promienia może wyzwolić połączenie (np. 15 m przy promieniu 20 m). Po zgłoszeniu połączenia stan bramy zapisywany jest w DataStore i pozostaje zablokowany również po restarcie usługi; ponowne uzbrojenie wymaga opuszczenia strefy na `promień + histereza`. Przy bardzo małym promieniu aplikacja wymaga odpowiednio dokładnego odczytu GPS.
+   - Gdy kilka stref się nakłada, jedno odświeżenie GPS może zlecić maksymalnie jedno połączenie. Wprowadzono ograniczenie kolejnych prób i kontrolę jakości pozycji GPS.
 
 6. **Nowoczesny interfejs w Jetpack Compose (Material 3):**
    - Reaktywne zakładki dla slotów (`TabRow`).
@@ -67,7 +68,7 @@ com.autobrama.app
 │   ├── ActiveGateStatus.kt          # Model stanu najbliższej bramy dla UI i powiadomień
 │   └── AutoCallForegroundService.kt # Usługa Foreground GPS + obsługa maszyn stanów
 ├── statemachine
-│   └── GateTriggerStateMachine.kt   # Maszyna stanów z histerezą (+150 m)
+│   └── GateTriggerStateMachine.kt   # Maszyna stanów z histerezą per brama
 └── ui
     ├── MainActivity.kt              # Główny ekran Compose (Material 3)
     ├── MainViewModel.kt             # ViewModel zarządzający stanem i logiką
@@ -80,7 +81,7 @@ com.autobrama.app
 
 W głównym ekranie wybierz **Eksport JSON**, aby zapisać plik `AndroidBrama-ustawienia.json` przez systemowy wybór dokumentu Android. **Import JSON** pozwala wybrać taki plik, sprawdza jego strukturę i zawartość, a przed zastąpieniem konfiguracji wymaga potwierdzenia.
 
-W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, aktywność poszczególnych bram, a także ustawienie automatyzacji i wymóg Android Auto. Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
+W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, histerezy poszczególnych bram, aktywność poszczególnych bram, a także ustawienie automatyzacji i wymóg Android Auto. Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Starsze pliki JSON bez pola histerezy są nadal obsługiwane i otrzymują domyślne 150 m. Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
 
 ## ⚠️ Android 11+ i ograniczenia systemowe
 
