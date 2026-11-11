@@ -4,13 +4,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
 
 class SettingsBackupTest {
     private fun sample() = SettingsBackup(
         automationEnabled = true,
         requireAndroidAuto = true,
         slots = listOf(
-            GateLocationSlot(1, "Dom", true, "+48111222333", 54.3520, 18.6466, 80f),
+            GateLocationSlot(1, "Dom", true, "+48111222333", 54.3520, 18.6466, 80f, 42f),
             GateLocationSlot(2, "Praca", false, "", 54.4, 18.65, 120f),
             GateLocationSlot(3, "Dzialka", true, "12345", 53.1, 19.5, 30f)
         )
@@ -23,7 +24,27 @@ class SettingsBackupTest {
         assertTrue(restored.requireAndroidAuto)
         assertEquals("+48111222333", restored.slots.first().phoneNumber)
         assertEquals(80f, restored.slots.first().radiusMeters, 0.01f)
+        assertEquals(42f, restored.slots.first().hysteresisMeters, 0.01f)
         assertFalse(restored.slots[1].enabled)
+    }
+
+    @Test
+    fun oldBackupWithoutHysteresisKeepsDefault150m() {
+        val old = JSONObject(sample().toJson())
+        val slots = old.getJSONArray("slots")
+        for (i in 0 until slots.length()) {
+            slots.getJSONObject(i).remove("hysteresisMeters")
+        }
+        val restored = SettingsBackup.parse(old.toString())
+        assertEquals(150f, restored.slots.first().hysteresisMeters, 0.01f)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectHysteresisOutsideAllowedRange() {
+        val bad = sample().copy(slots = sample().slots.map {
+            if (it.id == 1) it.copy(hysteresisMeters = 2500f) else it
+        })
+        SettingsBackup.parse(bad.toJson())
     }
 
     @Test(expected = IllegalArgumentException::class)
