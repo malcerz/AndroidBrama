@@ -103,26 +103,36 @@ class GateTriggerStateMachineTest {
         assertFalse(stateMachine.hasTriggeredInSession)
     }
     @Test
-    fun startupInsideGateDoesNotDialUntilVehicleLeavesAndReturns() {
-        val safe = GateTriggerStateMachine(
-            hysteresisOffsetMeters = 150f,
-            requireOutsideBeforeFirstTrigger = true
-        )
-        assertTrue(safe.processDistance(15f, radius) is StateMachineAction.NoAction)
-        assertTrue(safe.processDistance(80f, radius) is StateMachineAction.NoAction)
-        assertTrue(safe.processDistance(30f, radius) is StateMachineAction.NoAction)
-        assertEquals(GateZoneState.HYSTERESIS_COOLDOWN, safe.currentState)
-        assertTrue(safe.processDistance(210f, radius) is StateMachineAction.NoAction)
-        assertTrue(safe.processDistance(45f, radius) is StateMachineAction.TriggerCall)
+    fun firstAccurateFixInside20mTriggersExactlyOnce() {
+        val machine = GateTriggerStateMachine(hysteresisOffsetMeters = 150f)
+        // Reported production case: 15 m from gate, 20 m activation radius,
+        // no earlier Telecom request and no physical departure.
+        val first = machine.processDistance(15f, 20f)
+        assertTrue("First fix inside the zone must trigger a call", first is StateMachineAction.TriggerCall)
+        assertEquals(GateZoneState.IN_ZONE_TRIGGERED, machine.currentState)
+        assertTrue(machine.processDistance(10f, 20f) is StateMachineAction.NoAction)
+        assertTrue(machine.processDistance(30f, 20f) is StateMachineAction.NoAction)
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.NoAction)
     }
 
     @Test
-    fun failedDialCanBeRearmedWithoutAnExtraGeofenceDeparture() {
-        val safe = GateTriggerStateMachine(requireOutsideBeforeFirstTrigger = true)
-        safe.processDistance(300f, radius)
-        assertTrue(safe.processDistance(40f, radius) is StateMachineAction.TriggerCall)
-        safe.rearmAfterFailedCall()
-        assertTrue(safe.processDistance(40f, radius) is StateMachineAction.TriggerCall)
+    fun persistedLatchSuppressesCallAfterServiceRestartUntil170mExit() {
+        val restored = GateTriggerStateMachine(hysteresisOffsetMeters = 150f)
+        restored.restoreTriggeredState()
+        assertTrue(restored.processDistance(15f, 20f) is StateMachineAction.NoAction)
+        assertTrue(restored.processDistance(80f, 20f) is StateMachineAction.NoAction)
+        assertTrue(restored.processDistance(15f, 20f) is StateMachineAction.NoAction)
+        assertTrue(restored.processDistance(171f, 20f) is StateMachineAction.NoAction)
+        assertEquals(GateZoneState.OUTSIDE_ZONE, restored.currentState)
+        assertTrue(restored.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
+    }
+
+    @Test
+    fun failedDialCanBeRetriedInSameZone() {
+        val machine = GateTriggerStateMachine()
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
+        machine.rearmAfterFailedCall()
+        assertTrue(machine.processDistance(15f, 20f) is StateMachineAction.TriggerCall)
     }
 
 }

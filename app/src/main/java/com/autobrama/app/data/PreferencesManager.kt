@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -23,6 +24,7 @@ class PreferencesManager(private val context: Context) {
         val KEY_REQUIRE_ANDROID_AUTO = booleanPreferencesKey("require_android_auto")
         val KEY_LAST_CALL_TIMESTAMP = longPreferencesKey("last_call_timestamp")
         val KEY_SLOTS_JSON = stringPreferencesKey("gate_location_slots_json")
+        private val KEY_LATCHED_GATES = stringSetPreferencesKey("gate_call_latched_slot_ids")
 
         // Klucze legacy dla wstecznej kompatybilności i migracji
         private val KEY_LEGACY_PHONE = stringPreferencesKey("gate_phone_number")
@@ -91,6 +93,22 @@ class PreferencesManager(private val context: Context) {
         }
     }
 
+    /** Gate IDs whose call has been initiated; survive app/service restarts. */
+    suspend fun getLatchedGateIds(): Set<Int> =
+        context.dataStore.data.map { preferences ->
+            (preferences[KEY_LATCHED_GATES] ?: emptySet())
+                .mapNotNull { it.toIntOrNull() }
+                .filter { it in 1..3 }
+                .toSet()
+        }.first()
+
+    suspend fun setLatchedGateIds(ids: Set<Int>) {
+        require(ids.all { it in 1..3 }) { "Invalid gate ID" }
+        context.dataStore.edit { preferences ->
+            preferences[KEY_LATCHED_GATES] = ids.map { it.toString() }.toSet()
+        }
+    }
+
     suspend fun setLastCallTimestamp(timestamp: Long) {
         context.dataStore.edit { preferences ->
             preferences[KEY_LAST_CALL_TIMESTAMP] = timestamp
@@ -123,6 +141,7 @@ class PreferencesManager(private val context: Context) {
             preferences[KEY_AUTOMATION_ENABLED] = safe.automationEnabled
             preferences[KEY_REQUIRE_ANDROID_AUTO] = safe.requireAndroidAuto
             preferences[KEY_LAST_CALL_TIMESTAMP] = 0L
+            preferences[KEY_LATCHED_GATES] = emptySet()
         }
     }
 

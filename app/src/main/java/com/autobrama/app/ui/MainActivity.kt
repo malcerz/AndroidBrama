@@ -83,6 +83,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
     val isGpsActive by viewModel.isGpsActive.collectAsState()
+    val serviceStatusMessage by viewModel.serviceStatusMessage.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
     val closestGateStatus by viewModel.closestGateStatus.collectAsState()
     val gateStatuses by viewModel.gateStatuses.collectAsState()
@@ -395,7 +396,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             Text("Stan strefy (${c.slot.name}):", style = MaterialTheme.typography.bodyMedium)
                             val stateLabel = when (c.zoneState) {
                                 GateZoneState.OUTSIDE_ZONE -> "Czuwanie (poza strefą)"
-                                GateZoneState.IN_ZONE_TRIGGERED -> "W strefie (połączenie zrobione)"
+                                GateZoneState.IN_ZONE_TRIGGERED -> "Wyzwolenie obsłużone (blokada)"
                                 GateZoneState.HYSTERESIS_COOLDOWN -> "Histereza (+150m blokada)"
                             }
                             Text(
@@ -410,6 +411,12 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             )
                         }
                     }
+
+                    Text(
+                        text = serviceStatusMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                     // Ostatnie połączenie
                     Row(
