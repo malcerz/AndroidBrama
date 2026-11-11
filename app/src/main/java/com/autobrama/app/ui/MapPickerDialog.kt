@@ -10,6 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import kotlin.math.roundToInt
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -42,14 +45,18 @@ import org.osmdroid.views.overlay.Polygon
 fun MapPickerDialog(
     slot: GateLocationSlot,
     onDismiss: () -> Unit,
-    onConfirm: (latitude: Double, longitude: Double, radiusMeters: Float) -> Unit
+    onConfirm: (latitude: Double, longitude: Double, radiusMeters: Float, hysteresisMeters: Float) -> Unit
 ) {
     val context = LocalContext.current
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
     var selectedLat by remember { mutableStateOf(slot.latitude) }
     var selectedLon by remember { mutableStateOf(slot.longitude) }
-    var currentRadius by remember { mutableStateOf(slot.radiusMeters) }
+    var currentRadius by remember(slot.id) { mutableFloatStateOf(slot.radiusMeters) }
+    var radiusText by remember(slot.id) { mutableStateOf(slot.radiusMeters.roundToInt().toString()) }
+    var hysteresisText by remember(slot.id) { mutableStateOf(slot.hysteresisMeters.roundToInt().toString()) }
+    val radiusValid = radiusText.toIntOrNull() in 20..500
+    val hysteresisValid = hysteresisText.toIntOrNull() in 0..2000
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var markerRef by remember { mutableStateOf<Marker?>(null) }
@@ -211,7 +218,7 @@ fun MapPickerDialog(
                     modifier = Modifier
                         .padding(16.dp)
                         .align(Alignment.BottomEnd)
-                        .padding(bottom = 190.dp),
+                        .padding(bottom = 270.dp),
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     shape = CircleShape
                 ) {
@@ -236,26 +243,46 @@ fun MapPickerDialog(
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                text = "Promień strefy aktywacji:",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
+                            OutlinedTextField(
+                                value = radiusText,
+                                onValueChange = { value ->
+                                    if (value.length <= 4 && value.all { it.isDigit() }) {
+                                        radiusText = value
+                                        val parsed = value.toIntOrNull()
+                                        if (parsed != null && parsed in 20..500) {
+                                            currentRadius = parsed.toFloat()
+                                            mapViewRef?.let { map ->
+                                                updateMapOverlays(selectedLat, selectedLon, currentRadius, map)
+                                            }
+                                        }
+                                    }
+                                },
+                                label = { Text("Promień (m)") },
+                                modifier = Modifier.weight(1f),
+                                isError = !radiusValid,
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                             )
-                            Text(
-                                text = "${currentRadius.toInt()} m",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                            OutlinedTextField(
+                                value = hysteresisText,
+                                onValueChange = { value ->
+                                    if (value.length <= 4 && value.all { it.isDigit() }) hysteresisText = value
+                                },
+                                label = { Text("Histereza (m)") },
+                                modifier = Modifier.weight(1f),
+                                isError = !hysteresisValid,
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
                             )
                         }
 
                         Slider(
-                            value = currentRadius,
+                            value = currentRadius.coerceIn(20f, 500f),
                             onValueChange = { newRadius ->
                                 currentRadius = newRadius
+                                radiusText = newRadius.roundToInt().toString()
                                 mapViewRef?.let { map ->
                                     updateMapOverlays(selectedLat, selectedLon, newRadius, map)
                                 }
@@ -263,6 +290,16 @@ fun MapPickerDialog(
                             valueRange = 20f..500f,
                             steps = 47,
                             modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Text(
+                            text = if (radiusValid && hysteresisValid)
+                                "Ponowne uzbrojenie: ${radiusText.toInt() + hysteresisText.toInt()} m"
+                            else "Promień: 20–500 m, histereza: 0–2000 m",
+                            fontSize = 12.sp,
+                            color = if (radiusValid && hysteresisValid)
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.error
                         )
 
                         Row(
@@ -278,10 +315,11 @@ fun MapPickerDialog(
 
                             Button(
                                 onClick = {
-                                    onConfirm(selectedLat, selectedLon, currentRadius)
+                                    onConfirm(selectedLat, selectedLon, radiusText.toFloat(), hysteresisText.toFloat())
                                     onDismiss()
                                 },
                                 modifier = Modifier.weight(1.5f),
+                                enabled = radiusValid && hysteresisValid,
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                             ) {
                                 Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
