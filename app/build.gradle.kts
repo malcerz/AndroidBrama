@@ -17,14 +17,30 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Stały klucz podpisu z sekretów GitHub Actions (zmienne środowiskowe).
+    // Bez nich (np. PR z forka) build używa domyślnego klucza debug.
+    val keystorePath = System.getenv("KEYSTORE_FILE")
+    val hasSigningKey = !keystorePath.isNullOrBlank() && file(keystorePath).exists()
+    if (hasSigningKey) {
+        signingConfigs {
+            create("shared") {
+                storeFile = file(keystorePath!!)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (hasSigningKey) "shared" else "debug")
         }
         debug {
             isMinifyEnabled = false
+            if (hasSigningKey) signingConfig = signingConfigs.getByName("shared")
         }
     }
 

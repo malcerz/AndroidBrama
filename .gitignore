@@ -25,3 +25,8 @@ bin/
 gen/
 out/
 app/build/
+
+# Signing keys
+*.p12
+*.jks
+*.keystore
