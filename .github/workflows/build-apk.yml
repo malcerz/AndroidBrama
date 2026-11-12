@@ -48,6 +48,7 @@ jobs:
           set -euo pipefail
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "::notice::KEYSTORE_BASE64 missing: test APKs will use the runner's debug key."
+            echo "APK_SIGNING_MODE=debug-fallback" >> "$GITHUB_ENV"
             exit 0
           fi
           if [ -z "$SIGN_STORE_PASSWORD" ] || [ -z "$SIGN_KEY_ALIAS" ] || [ -z "$SIGN_KEY_PASSWORD" ]; then
@@ -62,6 +63,14 @@ jobs:
             echo "::error::Cannot open keystore or signing alias. Verify KEYSTORE_PASSWORD, KEY_ALIAS and file format."
             exit 1
           fi
+          # Explicitly reject algorithms unsupported by Android's APK signer.
+          CERT_INFO="$(keytool -list -v -keystore "$RUNNER_TEMP/release.p12" -storepass "$SIGN_STORE_PASSWORD" -alias "$SIGN_KEY_ALIAS" 2>/dev/null)"
+          if ! printf '%s' "$CERT_INFO" | grep -Eiq 'Subject Public Key Algorithm:.*(RSA|EC)'; then
+            echo "::warning::Signing certificate is not RSA/EC (for example ML-DSA). Test APKs will use a temporary DEBUG key; replace the keystore for stable upgrades."
+            echo "APK_SIGNING_MODE=debug-fallback" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "APK_SIGNING_MODE=developer-keystore" >> "$GITHUB_ENV"
           printf 'KEYSTORE_FILE=%s\n' "$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
           printf 'KEYSTORE_PASSWORD=%s\n' "$SIGN_STORE_PASSWORD" >> "$GITHUB_ENV"
           printf 'KEY_ALIAS=%s\n' "$SIGN_KEY_ALIAS" >> "$GITHUB_ENV"
@@ -95,11 +104,21 @@ jobs:
             fi
           done < <(find app/build/outputs/apk -name '*.apk' -print0)
 
+      - name: Record signing mode in the downloaded archive
+        shell: bash
+        run: |
+          printf 'APK_SIGNING_MODE=%s\n' "${APK_SIGNING_MODE:-debug-fallback}" > app/build/outputs/apk/signing-info.txt
+          if [ "${APK_SIGNING_MODE:-debug-fallback}" != "developer-keystore" ]; then
+            echo "::warning::Use only as test APK. Save settings before replacing an installation signed with another key."
+          fi
+
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: AndroidBrama-APK
-          path: app/build/outputs/apk/**/*.apk
+          path: |
+            app/build/outputs/apk/**/*.apk
+            app/build/outputs/apk/signing-info.txt
           if-no-files-found: error
           retention-days: 30
 
