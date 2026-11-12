@@ -77,11 +77,22 @@ com.autobrama.app
 
 ---
 
+## 🚴 Wykrywanie radaru Magene L508 przez Bluetooth LE
+
+1. Włącz radar L508 i Bluetooth w telefonie.
+2. W AutoBrama wybierz **Wyszukaj urządzenia BLE (30 s)**, przyznaj uprawnienie **Urządzenia w pobliżu** i znajdź reklamowany radar (np. `19813-5`).
+3. Dotknij konkretnego urządzenia z listy; wybór zapisywany jest po adresie BLE.
+4. Włącz automatyzację. Jeśli **Wymagaj Android Auto** pozostaje aktywne, GPS może uruchomić zarówno połączenie Android Auto, jak i wykrycie wybranego radaru. Jeśli to wymaganie wyłączysz, GPS działa bezwarunkowo po aktywowaniu automatyzacji, tak jak dotychczas.
+
+Aplikacja pasywnie skanuje reklamy BLE i **nie łączy się z radarem**, nie pobiera baterii i nie zakłóca połączenia ANT+ z Edge. Dwa sygnały reklamowe potwierdzają obecność; utrata sygnału wyłącza tryb radarowy po 60 sekundach. Dopiero skonfigurowane warunki GPS/bramy prowadzą do wybierania numeru. Sygnał BLE oznacza **obecność w pobliżu**, a nie potwierdzoną jazdę. Urządzenia mogą nie nadawać ciągłych reklam lub zmieniać swój prywatny adres BLE; w takim przypadku wykrywanie może wymagać ponownego wybrania radaru. Android może ograniczać skanowanie w tle. Używaj statusu BLE na ekranie do diagnozy.
+
+Android 12+ wymaga uprawnień BLUETOOTH_SCAN i BLUETOOTH_CONNECT, a aplikacja nadal wymaga dokładnej lokalizacji dla geofencingu. **Test na fizycznym L508 jest konieczny**, zwłaszcza przy wyłączonym ekranie.
+
 ## 💾 Eksport i import ustawień
 
 W głównym ekranie wybierz **Eksport JSON**, aby zapisać plik `AndroidBrama-ustawienia.json` przez systemowy wybór dokumentu Android. **Import JSON** pozwala wybrać taki plik, sprawdza jego strukturę i zawartość, a przed zastąpieniem konfiguracji wymaga potwierdzenia.
 
-W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, histerezy poszczególnych bram, aktywność poszczególnych bram, a także ustawienie automatyzacji i wymóg Android Auto. Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Starsze pliki JSON bez pola histerezy są nadal obsługiwane i otrzymują domyślne 150 m. Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
+W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, histerezy poszczególnych bram, aktywność poszczególnych bram, a także ustawienie automatyzacji, wymóg Android Auto oraz wybrany radar BLE (adres, nazwa, włączenie). Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Starsze pliki JSON bez pola histerezy są nadal obsługiwane i otrzymują domyślne 150 m. Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
 
 ## ⚠️ Android 11+ i ograniczenia systemowe
 
