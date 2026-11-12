@@ -11,13 +11,17 @@ import org.json.JSONObject
 data class SettingsBackup(
     val automationEnabled: Boolean,
     val requireAndroidAuto: Boolean,
-    val slots: List<GateLocationSlot>
+    val slots: List<GateLocationSlot>,
+    val radarConfig: RadarConfig = RadarConfig(false, "", "")
 ) {
     fun toJson(): String = JSONObject().apply {
         put("format", FORMAT)
         put("version", VERSION)
         put("automationEnabled", automationEnabled)
         put("requireAndroidAuto", requireAndroidAuto)
+        put("radarEnabled", radarConfig.enabled)
+        put("radarAddress", radarConfig.address)
+        put("radarName", radarConfig.name)
         put("slots", JSONArray().apply {
             slots.sortedBy { it.id }.forEach { put(it.toJsonObject()) }
         })
@@ -25,7 +29,7 @@ data class SettingsBackup(
 
     companion object {
         const val FORMAT = "AndroidBramaSettings"
-        const val VERSION = 1
+        const val VERSION = 2
         const val MAX_BACKUP_BYTES = 1024 * 1024
 
         /** Validates the whole file before any DataStore preference is changed. */
@@ -38,7 +42,7 @@ data class SettingsBackup(
                 require(root.getString("format") == FORMAT) {
                     "Nieprawidłowy format pliku ustawień."
                 }
-                require(root.getInt("version") == VERSION) {
+                require(root.getInt("version") in 1..VERSION) {
                     "Nieobsługiwana wersja pliku ustawień."
                 }
 
@@ -79,10 +83,21 @@ data class SettingsBackup(
                 require(slots.map { it.id }.toSet() == setOf(1, 2, 3)) {
                     "W pliku są powtórzone lub brakujące identyfikatory bram."
                 }
+                val radarEnabled = root.optBoolean("radarEnabled", false)
+                val radarAddress = root.optString("radarAddress", "").trim().uppercase()
+                val radarName = root.optString("radarName", "").take(80)
+                require(radarAddress.isEmpty() ||
+                    radarAddress.matches(Regex("([0-9A-F]{2}:){5}[0-9A-F]{2}"))) {
+                    "Nieprawidłowy adres radaru BLE."
+                }
+                require(!radarEnabled || radarAddress.isNotBlank()) {
+                    "Tryb radaru wymaga wskazania urządzenia."
+                }
                 return SettingsBackup(
                     automationEnabled = root.getBoolean("automationEnabled"),
                     requireAndroidAuto = root.getBoolean("requireAndroidAuto"),
-                    slots = slots.sortedBy { it.id }
+                    slots = slots.sortedBy { it.id },
+                    radarConfig = RadarConfig(radarEnabled, radarAddress, radarName)
                 )
             } catch (e: JSONException) {
                 throw IllegalArgumentException("Uszkodzony lub nieprawidłowy plik JSON.", e)
