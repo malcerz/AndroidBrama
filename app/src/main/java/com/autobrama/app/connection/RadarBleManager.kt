@@ -56,10 +56,14 @@ object RadarBleManager {
                 context?.let { updateScanner(it) }
             }
             val fresh = monitor && tracker.isNearby(now)
-            if (_present.value != fresh) _present.value = fresh
+            if (_present.value != fresh) {
+                _present.value = fresh
+                if (!fresh && monitor) _status.value = "Nie wykryto radaru przez 60 sekund"
+            }
             if (monitor && scanner == null && now >= nextRetryAfter) {
                 context?.let { updateScanner(it) }
             }
+            handler.removeCallbacks(this)
             if (monitor || discoveryUntil > now) handler.postDelayed(this, 5_000L)
         }
     }
@@ -87,10 +91,10 @@ object RadarBleManager {
             val normalized = address.trim().uppercase()
             if (targetAddress != normalized) {
                 targetAddress = normalized
-                targetName = name
                 tracker.reset()
                 _present.value = false
             }
+            targetName = name
             monitor = enabled && normalized.isNotBlank()
             if (!monitor) {
                 tracker.reset()
