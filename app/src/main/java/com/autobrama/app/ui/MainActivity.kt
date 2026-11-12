@@ -1,6 +1,7 @@
 package com.autobrama.app.ui
 
 import android.Manifest
+import com.autobrama.app.connection.RadarBleManager
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -79,6 +80,10 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isAutomationEnabled by viewModel.isAutomationEnabled.collectAsState()
     val requireAndroidAuto by viewModel.requireAndroidAuto.collectAsState()
+    val radarConfig by viewModel.radarConfig.collectAsState()
+    val radarPresent by viewModel.radarPresent.collectAsState()
+    val radarDevices by viewModel.radarDevices.collectAsState()
+    val radarScanStatus by viewModel.radarScanStatus.collectAsState()
     val slots by viewModel.slots.collectAsState()
     val lastCallTimestamp by viewModel.lastCallTimestamp.collectAsState()
 
@@ -125,6 +130,18 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
         }
     }
 
+    val blePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        if (results.values.all { it } && RadarBleManager.hasPermission(context)) {
+            viewModel.beginRadarDiscovery(context)
+        } else {
+            Toast.makeText(context,
+                "Zezwól na pobliskie urządzenia Bluetooth i dokładną lokalizację",
+                Toast.LENGTH_LONG).show()
+        }
+    }
+
     LaunchedEffect(userMessage) {
         userMessage?.let {
             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
@@ -147,7 +164,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
             text = {
                 Text(
                     "Import zastąpi konfigurację wszystkich 3 bram (lokalizacje, numery, odległości) " +
-                    "oraz ustawienia automatyzacji i Android Auto.\\n\\n" +
+                    "oraz ustawienia automatyzacji, Android Auto i radaru BLE.\\n\\n" +
                     "Automatyzacja po imporcie: " +
                     (if (backup.automationEnabled) "WŁĄCZONA" else "WYŁĄCZONA") +
                     ". Potwierdzasz?"
@@ -293,7 +310,8 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = if (requireAndroidAuto)
-                                    "GPS włącza się tylko w aucie (oszczędza baterię)"
+                                    if (radarConfig.enabled) "GPS uruchamia Android Auto lub radar Magene"
+                                    else "GPS włącza się tylko w aucie (oszczędza baterię)"
                                 else
                                     "Tryb testowy (bez auta) – GPS aktywny od razu",
                                 style = MaterialTheme.typography.bodySmall,
@@ -307,6 +325,88 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             }
                         )
                     }
+                }
+            }
+
+            // RADAR BLE: wybór rzeczywistego urządzenia oraz czujnik obecności.
+            Card(modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Magene L508 — wykrywanie BLE",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary)
+                    Row(modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text("Radar aktywuje GPS również bez Android Auto",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium)
+                        Switch(
+                            checked = radarConfig.enabled,
+                            enabled = radarConfig.address.isNotBlank(),
+                            onCheckedChange = { checked ->
+                                viewModel.toggleRadarEnabled(checked)
+                            }
+                        )
+                    }
+                    Text(
+                        text = if (radarConfig.address.isBlank())
+                            "Brak wybranego radaru. Włącz L508 i wybierz go z listy."
+                        else "Wybrano: ${radarConfig.name} (${radarConfig.address})",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = if (radarPresent) "RADAR W POBLIŻU — sygnał BLE potwierdzony"
+                            else if (radarConfig.enabled) "Radar nie został wykryty"
+                            else "Monitorowanie radaru wyłączone",
+                        color = if (radarPresent) Color(0xFF2E7D32) else Color.Gray,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(radarScanStatus, style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(
+                        onClick = {
+                            if (RadarBleManager.hasPermission(context)) {
+                                viewModel.beginRadarDiscovery(context)
+                            } else {
+                                val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                                    arrayOf(
+                                        Manifest.permission.BLUETOOTH_SCAN,
+                                        Manifest.permission.BLUETOOTH_CONNECT,
+                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                    )
+                                else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+                                blePermissionLauncher.launch(permissions)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Wyszukaj urządzenia BLE (30 s)") }
+                    if (radarDevices.isNotEmpty()) {
+                        Text(
+                            "Wybierz swój radar (np. 19813-5 / L508):",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                        radarDevices.take(12).forEach { device ->
+                            TextButton(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = { viewModel.selectRadar(device) }
+                            ) {
+                                Text("${device.name}  ·  ${device.address}  ·  ${device.rssi} dBm")
+                            }
+                        }
+                    }
+                    Text(
+                        "Obecność BLE nie potwierdza jazdy rowerem. Skanowanie nie " +
+                        "łączy się z radarem. Przy zmianie adresu BLE może być wymagany ponowny wybór.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
@@ -520,7 +620,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     )
                     Text(
                         "Zapisz lub odtwórz 3 bramy, numery telefonów, współrzędne GPS, " +
-                        "odległości aktywacji, aktywne sloty i tryb Android Auto. " +
+                        "odległości aktywacji, aktywne sloty, tryb Android Auto i radar BLE. " +
                         "Plik JSON zawiera prywatne dane – nie udostępniaj go publicznie.",
                         style = MaterialTheme.typography.bodySmall
                     )
