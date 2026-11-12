@@ -17,11 +17,15 @@ import androidx.core.app.ActivityCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.autobrama.app.connection.CarConnectionManager
+import com.autobrama.app.connection.RadarBleManager
+import com.autobrama.app.connection.NearbyBleDevice
+import com.autobrama.app.data.RadarConfig
 import com.autobrama.app.data.GateLocationSlot
 import com.autobrama.app.data.PreferencesManager
 import com.autobrama.app.receiver.CarConnectionReceiver
 import com.autobrama.app.service.ActiveGateStatus
 import com.autobrama.app.service.AutoCallForegroundService
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +42,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val requireAndroidAuto: StateFlow<Boolean> = prefs.requireAndroidAutoFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val radarConfig: StateFlow<RadarConfig> = prefs.radarConfigFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RadarConfig(false, "", ""))
+    val radarPresent = RadarBleManager.present
+    val radarScanStatus = RadarBleManager.status
+    val radarDevices = RadarBleManager.devices
 
     val slots: StateFlow<List<GateLocationSlot>> = prefs.slotsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GateLocationSlot.defaultSlots())
@@ -98,6 +108,36 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
             _userMessage.value = if (required)
                 "Android Auto wymagane; GPS włączy się tylko przy projekcji."
             else "Tryb bez auta – GPS aktywny podczas automatyzacji."
+        }
+    }
+
+    fun beginRadarDiscovery(context: Context) {
+        if (!RadarBleManager.hasPermission(context)) {
+            _userMessage.value = "Przyznaj dostęp do pobliskich urządzeń Bluetooth oraz lokalizacji."
+            return
+        }
+        RadarBleManager.startDiscovery(context)
+        _userMessage.value = "Skanowanie BLE przez 30 sekund. Włącz radar Magene L508."
+    }
+
+    fun selectRadar(device: NearbyBleDevice) {
+        viewModelScope.launch {
+            prefs.setRadarConfig(true, device.address, device.name)
+            _userMessage.value = "Wybrano radar ${device.name}. Wykrycie BLE może uruchamiać GPS."
+        }
+    }
+
+    fun toggleRadarEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val previous = prefs.radarConfigFlow.first()
+            if (enabled && previous.address.isBlank()) {
+                _userMessage.value = "Najpierw wyszukaj i wybierz radar."
+                return@launch
+            }
+            prefs.setRadarConfig(enabled, previous.address, previous.name)
+            _userMessage.value = if (enabled)
+                "Wykrycie radaru może aktywować GPS także bez Android Auto."
+            else "Wykrywanie radaru wyłączone."
         }
     }
 
@@ -202,7 +242,7 @@ fun testMakeCall(phoneNumber: String, context: Context) {
                 val started = if (backup.automationEnabled)
                     AutoCallForegroundService.startService(context)
                 else true
-                _userMessage.value = if (started) "Zaimportowano 3 bramy i ustawienia automatyzacji."
+                _userMessage.value = if (started) "Zaimportowano bramy, radar BLE i automatyzację."
                 else "Ustawienia zaimportowane, ale usługa nie wystartowała. Sprawdź GPS."
             } catch (e: Exception) {
                 _userMessage.value = "Import nieudany: ${e.message}"

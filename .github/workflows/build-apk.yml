@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [main, fix/reliability-settings-backup]
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -37,30 +37,88 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Decode signing keystore
+      - name: Validate optional developer signing key
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SIGN_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SIGN_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGN_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
-            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
-            echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
-            echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> "$GITHUB_ENV"
-            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> "$GITHUB_ENV"
-          else
-            echo "Brak sekretu KEYSTORE_BASE64 - build z domyślnym kluczem debug"
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::notice::KEYSTORE_BASE64 missing: test APKs will use the runner's debug key."
+            echo "APK_SIGNING_MODE=debug-fallback" >> "$GITHUB_ENV"
+            exit 0
           fi
+          if [ -z "$SIGN_STORE_PASSWORD" ] || [ -z "$SIGN_KEY_ALIAS" ] || [ -z "$SIGN_KEY_PASSWORD" ]; then
+            echo "::error::Signing secret set incomplete. Expected KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD."
+            exit 1
+          fi
+          if ! printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.p12"; then
+            echo "::error::KEYSTORE_BASE64 is not valid Base64."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$RUNNER_TEMP/release.p12" -storepass "$SIGN_STORE_PASSWORD" -alias "$SIGN_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::Cannot open keystore or signing alias. Verify KEYSTORE_PASSWORD, KEY_ALIAS and file format."
+            exit 1
+          fi
+          # Explicitly reject algorithms unsupported by Android's APK signer.
+          CERT_INFO="$(keytool -list -v -keystore "$RUNNER_TEMP/release.p12" -storepass "$SIGN_STORE_PASSWORD" -alias "$SIGN_KEY_ALIAS" 2>/dev/null)"
+          if ! printf '%s' "$CERT_INFO" | grep -Eiq 'Subject Public Key Algorithm:.*(RSA|EC)'; then
+            echo "::warning::Signing certificate is not RSA/EC (for example ML-DSA). Test APKs will use a temporary DEBUG key; replace the keystore for stable upgrades."
+            echo "APK_SIGNING_MODE=debug-fallback" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "APK_SIGNING_MODE=developer-keystore" >> "$GITHUB_ENV"
+          printf 'KEYSTORE_FILE=%s\n' "$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+          printf 'KEYSTORE_PASSWORD=%s\n' "$SIGN_STORE_PASSWORD" >> "$GITHUB_ENV"
+          printf 'KEY_ALIAS=%s\n' "$SIGN_KEY_ALIAS" >> "$GITHUB_ENV"
+          printf 'KEY_PASSWORD=%s\n' "$SIGN_KEY_PASSWORD" >> "$GITHUB_ENV"
+          echo "::notice::Developer signing keystore validated; no key contents are logged."
 
       - name: Compile debug and release APKs
         run: |
           chmod +x ./gradlew
           ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease --stacktrace
 
+      - name: Verify APK signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          if [ -n "${KEYSTORE_FILE:-}" ]; then
+            EXPECTED="$(keytool -exportcert -keystore "$KEYSTORE_FILE" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" | sha256sum | awk '{print $1}')"
+          fi
+          while IFS= read -r -d '' APK; do
+            "$APKSIGNER" verify --verbose "$APK"
+            ACTUAL="$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ':[:space:]')"
+            if [ -n "${KEYSTORE_FILE:-}" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::APK signer does not match the supplied keystore certificate."
+              exit 1
+            fi
+            if [ -n "${KEYSTORE_FILE:-}" ]; then
+              echo "::notice::$(basename "$APK") signed with validated developer keystore."
+            else
+              echo "::warning::$(basename "$APK") uses a generated debug signing key (not stable across runs)."
+            fi
+          done < <(find app/build/outputs/apk -name '*.apk' -print0)
+
+      - name: Record signing mode in the downloaded archive
+        shell: bash
+        run: |
+          printf 'APK_SIGNING_MODE=%s\n' "${APK_SIGNING_MODE:-debug-fallback}" > app/build/outputs/apk/signing-info.txt
+          if [ "${APK_SIGNING_MODE:-debug-fallback}" != "developer-keystore" ]; then
+            echo "::warning::Use only as test APK. Save settings before replacing an installation signed with another key."
+          fi
+
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: AndroidBrama-APK
-          path: app/build/outputs/apk/**/*.apk
+          path: |
+            app/build/outputs/apk/**/*.apk
+            app/build/outputs/apk/signing-info.txt
           if-no-files-found: error
           retention-days: 30
 

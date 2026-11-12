@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.map
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "autobrama_settings")
 
+data class RadarConfig(val enabled: Boolean, val address: String, val name: String)
+
 class PreferencesManager(private val context: Context) {
 
     companion object {
@@ -24,6 +26,9 @@ class PreferencesManager(private val context: Context) {
         val KEY_REQUIRE_ANDROID_AUTO = booleanPreferencesKey("require_android_auto")
         val KEY_LAST_CALL_TIMESTAMP = longPreferencesKey("last_call_timestamp")
         val KEY_SLOTS_JSON = stringPreferencesKey("gate_location_slots_json")
+        val KEY_RADAR_ENABLED = booleanPreferencesKey("radar_ble_enabled")
+        val KEY_RADAR_ADDRESS = stringPreferencesKey("radar_ble_address")
+        val KEY_RADAR_NAME = stringPreferencesKey("radar_ble_name")
         private val KEY_LATCHED_GATES = stringSetPreferencesKey("gate_call_latched_slot_ids")
 
         // Klucze legacy dla wstecznej kompatybilności i migracji
@@ -43,6 +48,27 @@ class PreferencesManager(private val context: Context) {
 
     val lastCallTimestampFlow: Flow<Long> = context.dataStore.data.map { preferences ->
         preferences[KEY_LAST_CALL_TIMESTAMP] ?: 0L
+    }
+
+    val radarConfigFlow: Flow<RadarConfig> = context.dataStore.data.map { prefs ->
+        RadarConfig(
+            prefs[KEY_RADAR_ENABLED] ?: false,
+            prefs[KEY_RADAR_ADDRESS] ?: "",
+            prefs[KEY_RADAR_NAME] ?: ""
+        )
+    }
+
+    suspend fun setRadarConfig(enabled: Boolean, address: String, name: String) {
+        val normalized = address.trim().uppercase()
+        require(normalized.isEmpty() ||
+            normalized.matches(Regex("([0-9A-F]{2}:){5}[0-9A-F]{2}"))) {
+            "Nieprawidłowy adres Bluetooth."
+        }
+        context.dataStore.edit { prefs ->
+            prefs[KEY_RADAR_ENABLED] = enabled && normalized.isNotBlank()
+            prefs[KEY_RADAR_ADDRESS] = normalized
+            prefs[KEY_RADAR_NAME] = name.take(80)
+        }
     }
 
     val slotsFlow: Flow<List<GateLocationSlot>> = context.dataStore.data.map { preferences ->
@@ -129,7 +155,8 @@ class PreferencesManager(private val context: Context) {
     suspend fun exportSettingsJson(): String = SettingsBackup(
         automationEnabled = isAutomationEnabled(),
         requireAndroidAuto = isAndroidAutoRequired(),
-        slots = getSlots()
+        slots = getSlots(),
+        radarConfig = radarConfigFlow.first()
     ).toJson()
 
     /** Atomic replacement of all portable settings after complete validation. */
@@ -142,6 +169,9 @@ class PreferencesManager(private val context: Context) {
             preferences[KEY_REQUIRE_ANDROID_AUTO] = safe.requireAndroidAuto
             preferences[KEY_LAST_CALL_TIMESTAMP] = 0L
             preferences[KEY_LATCHED_GATES] = emptySet()
+            preferences[KEY_RADAR_ENABLED] = safe.radarConfig.enabled
+            preferences[KEY_RADAR_ADDRESS] = safe.radarConfig.address
+            preferences[KEY_RADAR_NAME] = safe.radarConfig.name
         }
     }
 
