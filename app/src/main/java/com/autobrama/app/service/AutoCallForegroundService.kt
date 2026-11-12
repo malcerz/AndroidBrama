@@ -25,6 +25,8 @@ import androidx.core.content.ContextCompat
 import com.autobrama.app.AutoBramaApplication
 import com.autobrama.app.R
 import com.autobrama.app.connection.CarConnectionManager
+import com.autobrama.app.connection.RadarBleManager
+import com.autobrama.app.data.RadarConfig
 import com.autobrama.app.data.GateLocationSlot
 import com.autobrama.app.data.PreferencesManager
 import com.autobrama.app.statemachine.GateTriggerStateMachine
@@ -141,34 +143,58 @@ class AutoCallForegroundService : Service() {
 
     private fun observeAutomation() {
         serviceScope.launch {
-            combine(
+            val options = combine(
                 preferencesManager.isAutomationEnabledFlow,
                 preferencesManager.requireAndroidAutoFlow,
                 CarConnectionManager.connectionType,
-                preferencesManager.slotsFlow
-            ) { enabled, requireAA, carType, slots ->
-                MonitorConfig(enabled, requireAA, carType, slots)
+                preferencesManager.slotsFlow,
+                preferencesManager.radarConfigFlow
+            ) { enabled, requireAA, carType, slots, radarConfig ->
+                MonitorConfig(enabled, requireAA, carType, slots, radarConfig)
+            }
+            combine(options, RadarBleManager.present) { config, present ->
+                config.copy(radarPresent = present)
             }.collect { config ->
                 if (!config.enabled) {
+                    RadarBleManager.setMonitoring(applicationContext, false, "", "")
                     stopLocationUpdates()
                     stopSelf()
                     return@collect
                 }
-                val activeSlots = config.slots.any { it.enabled && it.phoneNumber.isNotBlank() }
-                val allowedByCar = !config.requireAA ||
-                    config.carType == CarConnection.CONNECTION_TYPE_PROJECTION
 
-                if (!allowedByCar) {
-                    stopLocationUpdates()
-                    val reason = if (config.carType == CarConnectionManager.UNKNOWN)
-                        "Ustalanie stanu Android Auto – GPS wyłączony"
-                    else "Czekam na Android Auto – GPS wyłączony"
-                    updateNotification(reason)
-                } else if (!activeSlots) {
-                    stopLocationUpdates()
-                    updateNotification("Brak skonfigurowanych aktywnych bram – GPS wyłączony")
-                } else {
-                    startLocationUpdates()
+                // Listen for the selected Magene's advertisements even when GPS
+                // is sleeping; no BLE connection is established to the radar.
+                val selected = config.radarConfig
+                RadarBleManager.setMonitoring(
+                    applicationContext,
+                    selected.enabled,
+                    selected.address,
+                    selected.name
+                )
+
+                val activeSlots = config.slots.any {
+                    it.enabled && it.phoneNumber.isNotBlank()
+                }
+                val allowed = !config.requireAA ||
+                    config.carType == CarConnection.CONNECTION_TYPE_PROJECTION ||
+                    (selected.enabled && selected.address.isNotBlank() && config.radarPresent)
+
+                when {
+                    !activeSlots -> {
+                        stopLocationUpdates()
+                        updateNotification("Brak skonfigurowanych aktywnych bram")
+                    }
+                    !allowed -> {
+                        stopLocationUpdates()
+                        updateNotification(
+                            if (selected.enabled && selected.address.isNotBlank())
+                                "Czekam na Android Auto lub radar Magene (BLE)"
+                            else if (config.carType == CarConnectionManager.UNKNOWN)
+                                "Ustalanie stanu Android Auto – GPS wyłączony"
+                            else "Czekam na Android Auto – GPS wyłączony"
+                        )
+                    }
+                    else -> startLocationUpdates()
                 }
             }
         }
@@ -178,7 +204,9 @@ class AutoCallForegroundService : Service() {
         val enabled: Boolean,
         val requireAA: Boolean,
         val carType: Int,
-        val slots: List<GateLocationSlot>
+        val slots: List<GateLocationSlot>,
+        val radarConfig: RadarConfig,
+        val radarPresent: Boolean = false
     )
 
     private fun startAsForeground(contentText: String) {
@@ -423,6 +451,7 @@ class AutoCallForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        RadarBleManager.setMonitoring(applicationContext, false, "", "")
         stopLocationUpdates()
         stateMachines.clear()
         failedRetryAfter.clear()
