@@ -24,6 +24,7 @@ class PreferencesManager(private val context: Context) {
     companion object {
         val KEY_AUTOMATION_ENABLED = booleanPreferencesKey("automation_enabled")
         val KEY_REQUIRE_ANDROID_AUTO = booleanPreferencesKey("require_android_auto")
+        val KEY_WAIT_FOR_GPS_FIX = booleanPreferencesKey("wait_for_gps_fix")
         val KEY_LAST_CALL_TIMESTAMP = longPreferencesKey("last_call_timestamp")
         val KEY_SLOTS_JSON = stringPreferencesKey("gate_location_slots_json")
         val KEY_RADAR_ENABLED = booleanPreferencesKey("radar_ble_enabled")
@@ -44,6 +45,11 @@ class PreferencesManager(private val context: Context) {
 
     val requireAndroidAutoFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[KEY_REQUIRE_ANDROID_AUTO] ?: true
+    }
+
+    /** Safe default: wait for a live satellite fix before an automatic call. */
+    val waitForGpsFixFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[KEY_WAIT_FOR_GPS_FIX] ?: true
     }
 
     val lastCallTimestampFlow: Flow<Long> = context.dataStore.data.map { preferences ->
@@ -107,6 +113,14 @@ class PreferencesManager(private val context: Context) {
         return context.dataStore.data.map { it[KEY_REQUIRE_ANDROID_AUTO] ?: true }.first()
     }
 
+    suspend fun isWaitForGpsFixEnabled(): Boolean = waitForGpsFixFlow.first()
+
+    suspend fun setWaitForGpsFixEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_WAIT_FOR_GPS_FIX] = enabled
+        }
+    }
+
     suspend fun setAndroidAutoRequired(required: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[KEY_REQUIRE_ANDROID_AUTO] = required
@@ -155,6 +169,7 @@ class PreferencesManager(private val context: Context) {
     suspend fun exportSettingsJson(): String = SettingsBackup(
         automationEnabled = isAutomationEnabled(),
         requireAndroidAuto = isAndroidAutoRequired(),
+        waitForGpsFix = isWaitForGpsFixEnabled(),
         slots = getSlots(),
         radarConfig = radarConfigFlow.first()
     ).toJson()
@@ -167,6 +182,7 @@ class PreferencesManager(private val context: Context) {
             preferences[KEY_SLOTS_JSON] = GateLocationSlot.listToJson(safe.slots)
             preferences[KEY_AUTOMATION_ENABLED] = safe.automationEnabled
             preferences[KEY_REQUIRE_ANDROID_AUTO] = safe.requireAndroidAuto
+            preferences[KEY_WAIT_FOR_GPS_FIX] = safe.waitForGpsFix
             preferences[KEY_LAST_CALL_TIMESTAMP] = 0L
             preferences[KEY_LATCHED_GATES] = emptySet()
             preferences[KEY_RADAR_ENABLED] = safe.radarConfig.enabled
