@@ -10,10 +10,13 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.telecom.TelecomManager
@@ -74,6 +77,8 @@ class AutoCallForegroundService : Service() {
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
         private val _isGpsActive = MutableStateFlow(false)
         val isGpsActive: StateFlow<Boolean> = _isGpsActive.asStateFlow()
+        private val _hasSatelliteFix = MutableStateFlow(false)
+        val hasSatelliteFix: StateFlow<Boolean> = _hasSatelliteFix.asStateFlow()
         private val _closestGateStatus = MutableStateFlow<ActiveGateStatus?>(null)
         val closestGateStatus: StateFlow<ActiveGateStatus?> = _closestGateStatus.asStateFlow()
         private val _gateStatuses = MutableStateFlow<Map<Int, ActiveGateStatus>>(emptyMap())
@@ -112,8 +117,20 @@ class AutoCallForegroundService : Service() {
     private val locationMutex = Mutex()
     private lateinit var preferencesManager: PreferencesManager
     private lateinit var fusedLocationClient: FusedLocationProviderClient
+    private lateinit var gpsLocationManager: LocationManager
     private lateinit var locationCallback: LocationCallback
+    private var gpsListener: LocationListener? = null
     private var locationListening = false
+    private var satelliteOnly = false
+    private var gpsSessionStartedNanos = 0L
+    private var trackingDecision = TrackingDecision(false, true)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val satelliteFixTimeout = Runnable {
+        if (locationListening && satelliteOnly) {
+            _hasSatelliteFix.value = false
+            updateNotification("Brak aktualnego fixu GPS – czekam na satelity")
+        }
+    }
     private val stateMachines = mutableMapOf<Int, GateTriggerStateMachine>()
     private val failedRetryAfter = mutableMapOf<Int, Long>()
     private var localLastCallAt = 0L
@@ -122,6 +139,7 @@ class AutoCallForegroundService : Service() {
         super.onCreate()
         preferencesManager = PreferencesManager(applicationContext)
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        gpsLocationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         CarConnectionManager.init(applicationContext)
 
         try {
@@ -152,10 +170,13 @@ class AutoCallForegroundService : Service() {
             ) { enabled, requireAA, carType, slots, radarConfig ->
                 MonitorConfig(enabled, requireAA, carType, slots, radarConfig)
             }
-            combine(options, RadarBleManager.present) { config, present ->
-                config.copy(radarPresent = present)
+            combine(
+                options, preferencesManager.waitForGpsFixFlow, RadarBleManager.present
+            ) { config, waitForGpsFix, present ->
+                config.copy(waitForGpsFix = waitForGpsFix, radarPresent = present)
             }.collect { config ->
                 if (!config.enabled) {
+                    trackingDecision = TrackingDecision(false, true)
                     RadarBleManager.setMonitoring(applicationContext, false, "", "")
                     stopLocationUpdates()
                     stopSelf()
@@ -175,16 +196,21 @@ class AutoCallForegroundService : Service() {
                 val activeSlots = config.slots.any {
                     it.enabled && it.phoneNumber.isNotBlank()
                 }
-                val allowed = !config.requireAA ||
-                    config.carType == CarConnection.CONNECTION_TYPE_PROJECTION ||
-                    (selected.enabled && selected.address.isNotBlank() && config.radarPresent)
+                trackingDecision = TrackingPolicy.evaluate(
+                    requireAndroidAuto = config.requireAA,
+                    waitForGpsFix = config.waitForGpsFix,
+                    androidAutoConnected =
+                        config.carType == CarConnection.CONNECTION_TYPE_PROJECTION,
+                    radarEnabled = selected.enabled && selected.address.isNotBlank(),
+                    radarPresent = config.radarPresent
+                )
 
                 when {
                     !activeSlots -> {
                         stopLocationUpdates()
                         updateNotification("Brak skonfigurowanych aktywnych bram")
                     }
-                    !allowed -> {
+                    !trackingDecision.allowed -> {
                         stopLocationUpdates()
                         updateNotification(
                             if (selected.enabled && selected.address.isNotBlank())
@@ -194,7 +220,7 @@ class AutoCallForegroundService : Service() {
                             else "Czekam na Android Auto – GPS wyłączony"
                         )
                     }
-                    else -> startLocationUpdates()
+                    else -> startLocationUpdates(trackingDecision.satelliteOnly)
                 }
             }
         }
@@ -206,7 +232,8 @@ class AutoCallForegroundService : Service() {
         val carType: Int,
         val slots: List<GateLocationSlot>,
         val radarConfig: RadarConfig,
-        val radarPresent: Boolean = false
+        val radarPresent: Boolean = false,
+        val waitForGpsFix: Boolean = true
     )
 
     private fun startAsForeground(contentText: String) {
@@ -248,8 +275,9 @@ class AutoCallForegroundService : Service() {
         }
     }
 
-    private fun startLocationUpdates() {
-        if (locationListening) return
+    private fun startLocationUpdates(requireSatellite: Boolean) {
+        if (locationListening && satelliteOnly == requireSatellite) return
+        if (locationListening) stopLocationUpdates()
         if (ContextCompat.checkSelfPermission(
                 this, Manifest.permission.ACCESS_FINE_LOCATION
             ) != PackageManager.PERMISSION_GRANTED
@@ -257,48 +285,96 @@ class AutoCallForegroundService : Service() {
             updateNotification("Brak dokładnej lokalizacji – GPS wyłączony")
             return
         }
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3000L)
-            .setMinUpdateIntervalMillis(2000L)
-            .setWaitForAccurateLocation(false)
-            .build()
-        locationCallback = object : LocationCallback() {
-            override fun onLocationResult(result: LocationResult) {
-                result.lastLocation?.let { onNewLocation(it) }
-            }
-        }
+        satelliteOnly = requireSatellite
+        _hasSatelliteFix.value = false
         try {
-            fusedLocationClient.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+            if (requireSatellite) {
+                // GPS_PROVIDER reports satellite fixes, not Wi-Fi/cell estimates.
+                // Reject observations created before this monitoring session.
+                gpsSessionStartedNanos = SystemClock.elapsedRealtimeNanos()
+                val listener = object : LocationListener {
+                    override fun onLocationChanged(location: Location) {
+                        onNewLocation(location, fromSatellite = true)
+                    }
+                }
+                gpsListener = listener
+                gpsLocationManager.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER, 2_000L, 0f, listener,
+                    Looper.getMainLooper()
+                )
+            } else {
+                val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3000L)
+                    .setMinUpdateIntervalMillis(2000L)
+                    .setWaitForAccurateLocation(false)
+                    .build()
+                locationCallback = object : LocationCallback() {
+                    override fun onLocationResult(result: LocationResult) {
+                        result.lastLocation?.let { onNewLocation(it, fromSatellite = false) }
+                    }
+                }
+                fusedLocationClient.requestLocationUpdates(
+                    request, locationCallback, Looper.getMainLooper()
+                )
+            }
             locationListening = true
             _isGpsActive.value = true
-            updateNotification("GPS aktywny – monitoruję strefy bram")
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Odmowa odczytu lokalizacji", e)
-            updateNotification("Brak dostępu do GPS – sprawdź uprawnienia")
+            if (requireSatellite) {
+                mainHandler.removeCallbacks(satelliteFixTimeout)
+                updateNotification("Czekam na nowy satelitarny fix GPS")
+            } else {
+                updateNotification("Lokalizacja aktywna – monitoruję strefy bram")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Nie można uruchomić lokalizacji", e)
+            gpsListener = null
+            _isGpsActive.value = false
+            updateNotification("Nie można uruchomić GPS – sprawdź lokalizację i uprawnienia")
         }
     }
 
     private fun stopLocationUpdates() {
+        mainHandler.removeCallbacks(satelliteFixTimeout)
         if (locationListening) {
             try {
-                fusedLocationClient.removeLocationUpdates(locationCallback)
+                if (satelliteOnly) {
+                    gpsListener?.let { gpsLocationManager.removeUpdates(it) }
+                } else {
+                    fusedLocationClient.removeLocationUpdates(locationCallback)
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Nie udało się zatrzymać GPS", e)
+                Log.w(TAG, "Nie udało się zatrzymać lokalizacji", e)
             }
         }
+        gpsListener = null
+        gpsSessionStartedNanos = 0L
         locationListening = false
+        _hasSatelliteFix.value = false
         _isGpsActive.value = false
         _closestGateStatus.value = null
         _gateStatuses.value = emptyMap()
     }
 
-    private fun onNewLocation(location: Location) {
+    private fun onNewLocation(location: Location, fromSatellite: Boolean) {
         serviceScope.launch {
             locationMutex.withLock {
-                if (!locationListening || !location.hasAccuracy()) return@withLock
+                if (!locationListening || !trackingDecision.allowed ||
+                    satelliteOnly != fromSatellite || !location.hasAccuracy()
+                ) return@withLock
+                // Satellite mode never accepts a network/fused/cached position.
+                if (fromSatellite &&
+                    (location.provider != LocationManager.GPS_PROVIDER ||
+                        location.elapsedRealtimeNanos < gpsSessionStartedNanos)
+                ) return@withLock
                 val ageNanos = SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
                 if (ageNanos < 0 || ageNanos > MAX_FIX_AGE_NANOS) {
                     updateNotification("Nieaktualna pozycja GPS – czekam na nową")
                     return@withLock
+                }
+
+                if (fromSatellite) {
+                    _hasSatelliteFix.value = true
+                    mainHandler.removeCallbacks(satelliteFixTimeout)
+                    mainHandler.postDelayed(satelliteFixTimeout, 15_000L)
                 }
 
                 val activeSlots = preferencesManager.getSlots().filter {
