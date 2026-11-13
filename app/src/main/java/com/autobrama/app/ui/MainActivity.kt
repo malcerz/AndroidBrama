@@ -80,6 +80,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isAutomationEnabled by viewModel.isAutomationEnabled.collectAsState()
     val requireAndroidAuto by viewModel.requireAndroidAuto.collectAsState()
+    val waitForGpsFix by viewModel.waitForGpsFix.collectAsState()
     val radarConfig by viewModel.radarConfig.collectAsState()
     val radarPresent by viewModel.radarPresent.collectAsState()
     val radarDevices by viewModel.radarDevices.collectAsState()
@@ -89,6 +90,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
     val isGpsActive by viewModel.isGpsActive.collectAsState()
+    val hasSatelliteFix by viewModel.hasSatelliteFix.collectAsState()
     val serviceStatusMessage by viewModel.serviceStatusMessage.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
     val closestGateStatus by viewModel.closestGateStatus.collectAsState()
@@ -325,6 +327,28 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             }
                         )
                     }
+
+                    HorizontalDivider()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = waitForGpsFix,
+                            onCheckedChange = { viewModel.toggleWaitForGpsFix(it) }
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Czekaj na GPS", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Przed automatycznym otwarciem wymagaj nowego fixu satelitarnego. " +
+                                    "Chroni przed otwarciem w garażu po uruchomieniu Android Auto. " +
+                                    "Dla radaru L508 fix jest zawsze wymagany.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
 
@@ -402,8 +426,9 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         }
                     }
                     Text(
-                        "Obecność BLE nie potwierdza jazdy rowerem. Skanowanie nie " +
-                        "łączy się z radarem. Przy zmianie adresu BLE może być wymagany ponowny wybór.",
+                        "Rozpoznanie radaru wymaga dwóch sygnałów BLE. Nie oznacza połączenia GATT " +
+                        "i nie zakłóca komunikacji z Garminem. Otwieranie na rowerze wymaga " +
+                        "dodatkowo satelitarnego fixu GPS. Po zmianie adresu BLE wybierz radar ponownie.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -462,6 +487,30 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         BadgeBox(
                             text = if (isGpsActive) "GPS AKTYWNY" else if (isServiceRunning) "CZUWA (GPS OFF)" else "ZATRZYMANY",
                             backgroundColor = if (isGpsActive) Color(0xFF2196F3) else if (isServiceRunning) Color(0xFF00897B) else Color(0xFF9E9E9E)
+                        )
+                    }
+
+                    // Wyświetl satelitarny fix odrębnie od samego nasłuchu lokalizacji.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Fix GPS:", style = MaterialTheme.typography.bodyMedium)
+                        val gpsRequired = waitForGpsFix ||
+                            (radarConfig.enabled && radarPresent &&
+                                carConnectionType != CarConnection.CONNECTION_TYPE_PROJECTION)
+                        val fixLabel = when {
+                            !isGpsActive -> "NIEAKTYWNY"
+                            hasSatelliteFix -> "FIX GPS"
+                            gpsRequired -> "CZEKAM NA FIX"
+                            else -> "NIEWYMAGANY"
+                        }
+                        BadgeBox(
+                            text = fixLabel,
+                            backgroundColor = if (hasSatelliteFix) Color(0xFF4CAF50)
+                                else if (isGpsActive && gpsRequired) Color(0xFFFFA000)
+                                else Color(0xFF9E9E9E)
                         )
                     }
 
@@ -620,7 +669,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     )
                     Text(
                         "Zapisz lub odtwórz 3 bramy, numery telefonów, współrzędne GPS, " +
-                        "odległości aktywacji, aktywne sloty, tryb Android Auto i radar BLE. " +
+                        "odległości aktywacji, aktywne sloty, tryb Android Auto, czekanie na GPS i radar BLE. " +
                         "Plik JSON zawiera prywatne dane – nie udostępniaj go publicznie.",
                         style = MaterialTheme.typography.bodySmall
                     )

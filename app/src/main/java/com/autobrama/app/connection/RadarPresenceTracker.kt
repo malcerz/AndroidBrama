@@ -3,10 +3,11 @@ package com.autobrama.app.connection
 /**
  * BLE advertisement sightings are evidence of proximity, not of cycling, pairing
  * or an active Bluetooth connection. Two independent sightings are required.
+ * Do not accept a radar signal that disappeared long ago as a live ride signal.
  * All times are monotonic (SystemClock.elapsedRealtime()).
  */
 class RadarPresenceTracker(
-    private val holdMillis: Long = 60_000L,
+    private val holdMillis: Long = 15_000L,
     private val confirmationWindowMillis: Long = 15_000L
 ) {
     private var lastSeen: Long = -1L

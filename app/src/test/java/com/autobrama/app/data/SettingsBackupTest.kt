@@ -23,6 +23,7 @@ class SettingsBackupTest {
         assertEquals(3, restored.slots.size)
         assertTrue(restored.automationEnabled)
         assertTrue(restored.requireAndroidAuto)
+        assertTrue(restored.waitForGpsFix)
         assertEquals("+48111222333", restored.slots.first().phoneNumber)
         assertEquals(80f, restored.slots.first().radiusMeters, 0.01f)
         assertEquals(42f, restored.slots.first().hysteresisMeters, 0.01f)
@@ -30,6 +31,18 @@ class SettingsBackupTest {
         assertTrue(restored.radarConfig.enabled)
         assertEquals("AA:BB:CC:DD:EE:FF", restored.radarConfig.address)
         assertEquals("19813-5", restored.radarConfig.name)
+    }
+
+    @Test fun gpsCheckboxRoundTripCanBeDisabled() {
+        val restored = SettingsBackup.parse(sample().copy(waitForGpsFix = false).toJson())
+        assertFalse(restored.waitForGpsFix)
+    }
+
+    @Test fun v2BackupWithoutGpsFlagDefaultsToSafeTrue() {
+        val old = JSONObject(sample().toJson())
+        old.put("version", 2)
+        old.remove("waitForGpsFix")
+        assertTrue(SettingsBackup.parse(old.toString()).waitForGpsFix)
     }
 
     @Test

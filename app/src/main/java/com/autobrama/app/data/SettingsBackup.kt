@@ -12,13 +12,15 @@ data class SettingsBackup(
     val automationEnabled: Boolean,
     val requireAndroidAuto: Boolean,
     val slots: List<GateLocationSlot>,
-    val radarConfig: RadarConfig = RadarConfig(false, "", "")
+    val radarConfig: RadarConfig = RadarConfig(false, "", ""),
+    val waitForGpsFix: Boolean = true
 ) {
     fun toJson(): String = JSONObject().apply {
         put("format", FORMAT)
         put("version", VERSION)
         put("automationEnabled", automationEnabled)
         put("requireAndroidAuto", requireAndroidAuto)
+        put("waitForGpsFix", waitForGpsFix)
         put("radarEnabled", radarConfig.enabled)
         put("radarAddress", radarConfig.address)
         put("radarName", radarConfig.name)
@@ -29,7 +31,7 @@ data class SettingsBackup(
 
     companion object {
         const val FORMAT = "AndroidBramaSettings"
-        const val VERSION = 2
+        const val VERSION = 3
         const val MAX_BACKUP_BYTES = 1024 * 1024
 
         /** Validates the whole file before any DataStore preference is changed. */
@@ -97,7 +99,9 @@ data class SettingsBackup(
                     automationEnabled = root.getBoolean("automationEnabled"),
                     requireAndroidAuto = root.getBoolean("requireAndroidAuto"),
                     slots = slots.sortedBy { it.id },
-                    radarConfig = RadarConfig(radarEnabled, radarAddress, radarName)
+                    radarConfig = RadarConfig(radarEnabled, radarAddress, radarName),
+                    // v1/v2 backups had no switch; choose the safe default.
+                    waitForGpsFix = if (root.has("waitForGpsFix")) root.getBoolean("waitForGpsFix") else true
                 )
             } catch (e: JSONException) {
                 throw IllegalArgumentException("Uszkodzony lub nieprawidłowy plik JSON.", e)
