@@ -58,7 +58,7 @@ object RadarBleManager {
             val fresh = monitor && tracker.isNearby(now)
             if (_present.value != fresh) {
                 _present.value = fresh
-                if (!fresh && monitor) _status.value = "Nie wykryto radaru przez 60 sekund"
+                if (!fresh && monitor) _status.value = "Brak świeżego sygnału radaru BLE (15 s)"
             }
             if (monitor && scanner == null && now >= nextRetryAfter) {
                 context?.let { updateScanner(it) }
