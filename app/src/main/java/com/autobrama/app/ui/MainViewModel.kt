@@ -43,6 +43,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val requireAndroidAuto: StateFlow<Boolean> = prefs.requireAndroidAutoFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
+    val waitForGpsFix: StateFlow<Boolean> = prefs.waitForGpsFixFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
     val radarConfig: StateFlow<RadarConfig> = prefs.radarConfigFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RadarConfig(false, "", ""))
     val radarPresent = RadarBleManager.present
@@ -108,6 +111,15 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
             _userMessage.value = if (required)
                 "Android Auto wymagane; GPS włączy się tylko przy projekcji."
             else "Tryb bez auta – GPS aktywny podczas automatyzacji."
+        }
+    }
+
+    fun toggleWaitForGpsFix(enabled: Boolean) {
+        viewModelScope.launch {
+            prefs.setWaitForGpsFixEnabled(enabled)
+            _userMessage.value = if (enabled)
+                "Po połączeniu Android Auto czekam na nowy satelitarny fix GPS."
+            else "Android Auto: dopuszczona pozycja sieciowa. Rower nadal wymaga GPS."
         }
     }
 
