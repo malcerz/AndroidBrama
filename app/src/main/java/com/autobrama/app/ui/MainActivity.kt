@@ -90,6 +90,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
     val isGpsActive by viewModel.isGpsActive.collectAsState()
+    val hasSatelliteFix by viewModel.hasSatelliteFix.collectAsState()
     val serviceStatusMessage by viewModel.serviceStatusMessage.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
     val closestGateStatus by viewModel.closestGateStatus.collectAsState()
@@ -486,6 +487,30 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         BadgeBox(
                             text = if (isGpsActive) "GPS AKTYWNY" else if (isServiceRunning) "CZUWA (GPS OFF)" else "ZATRZYMANY",
                             backgroundColor = if (isGpsActive) Color(0xFF2196F3) else if (isServiceRunning) Color(0xFF00897B) else Color(0xFF9E9E9E)
+                        )
+                    }
+
+                    // Wyświetl satelitarny fix odrębnie od samego nasłuchu lokalizacji.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Fix GPS:", style = MaterialTheme.typography.bodyMedium)
+                        val gpsRequired = waitForGpsFix ||
+                            (radarConfig.enabled && radarPresent &&
+                                carConnectionType != CarConnection.CONNECTION_TYPE_PROJECTION)
+                        val fixLabel = when {
+                            !isGpsActive -> "NIEAKTYWNY"
+                            hasSatelliteFix -> "FIX GPS"
+                            gpsRequired -> "CZEKAM NA FIX"
+                            else -> "NIEWYMAGANY"
+                        }
+                        BadgeBox(
+                            text = fixLabel,
+                            backgroundColor = if (hasSatelliteFix) Color(0xFF4CAF50)
+                                else if (isGpsActive && gpsRequired) Color(0xFFFFA000)
+                                else Color(0xFF9E9E9E)
                         )
                     }
 
