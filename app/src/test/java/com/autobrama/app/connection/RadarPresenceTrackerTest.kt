@@ -17,8 +17,8 @@ class RadarPresenceTrackerTest {
         val tracker = RadarPresenceTracker()
         tracker.seen(1000)
         tracker.seen(1200)
-        assertTrue(tracker.isNearby(60_000))
-        assertFalse(tracker.isNearby(61_201))
+        assertTrue(tracker.isNearby(16_000))
+        assertFalse(tracker.isNearby(16_201))
     }
 
     @Test fun sparseAdvertisementsRequireNewConfirmation() {
