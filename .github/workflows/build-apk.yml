@@ -128,8 +128,10 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    # Only a version tag (for example v1.1) publishes a release.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Runs for builds of main and for v* tags. On main it publishes a release
+    # only when none exists yet for the versionName in app/build.gradle.kts,
+    # so bumping the version is what ships a new release.
+    if: github.event_name == 'push'
     needs: build-apk
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -137,6 +139,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download APK artifacts
         uses: actions/download-artifact@v4
         with:
@@ -148,9 +153,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            VERSION="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+            if [ -z "$VERSION" ]; then
+              echo "::error::Cannot read versionName from app/build.gradle.kts."
+              exit 1
+            fi
+            TAG="v$VERSION"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists; nothing to publish."
+            exit 0
+          fi
           RELEASE_APK="$(find apk -path '*release*' -name '*.apk' | head -n 1)"
           DEBUG_APK="$(find apk -path '*debug*' -name '*.apk' | head -n 1)"
           if [ -z "$RELEASE_APK" ]; then
@@ -172,8 +190,7 @@ jobs:
             fi
           } > release-notes.md
           gh release create "$TAG" "${ASSETS[@]}" \
+            --target "$GITHUB_SHA" \
             --title "AndroidBrama $TAG" \
             --notes-file release-notes.md \
-            --generate-notes \
-            --verify-tag
-
+            --generate-notes
