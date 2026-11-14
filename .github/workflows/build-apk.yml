@@ -3,6 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -124,3 +125,55 @@ jobs:
 
       - name: Run unit tests
         run: ./gradlew --no-daemon :app:testDebugUnitTest --stacktrace
+
+  release:
+    name: Publish GitHub Release
+    # Only a version tag (for example v1.1) publishes a release.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: AndroidBrama-APK
+          path: apk
+
+      - name: Create release with APK files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          RELEASE_APK="$(find apk -path '*release*' -name '*.apk' | head -n 1)"
+          DEBUG_APK="$(find apk -path '*debug*' -name '*.apk' | head -n 1)"
+          if [ -z "$RELEASE_APK" ]; then
+            echo "::error::Release APK not found in the build artifact."
+            exit 1
+          fi
+          cp "$RELEASE_APK" "AndroidBrama-$TAG.apk"
+          ASSETS=("AndroidBrama-$TAG.apk")
+          if [ -n "$DEBUG_APK" ]; then
+            cp "$DEBUG_APK" "AndroidBrama-$TAG-debug.apk"
+            ASSETS+=("AndroidBrama-$TAG-debug.apk")
+          fi
+          SIGNING="$(sed -n 's/^APK_SIGNING_MODE=//p' apk/signing-info.txt 2>/dev/null || true)"
+          {
+            echo "Signing mode: ${SIGNING:-unknown}"
+            if [ "${SIGNING:-}" != "developer-keystore" ]; then
+              echo
+              echo "Test build signed with a temporary debug key: it cannot be installed over a copy signed with another key. Export settings before reinstalling."
+            fi
+          } > release-notes.md
+          gh release create "$TAG" "${ASSETS[@]}" \
+            --title "AndroidBrama $TAG" \
+            --notes-file release-notes.md \
+            --generate-notes \
+            --verify-tag
+
