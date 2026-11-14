@@ -135,7 +135,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
     val blePermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        if (results.values.all { it } && RadarBleManager.hasPermission(context)) {
+        if (RadarBleManager.hasPermission(context)) {
             viewModel.beginRadarDiscovery(context)
         } else {
             Toast.makeText(context,
@@ -428,7 +428,8 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     Text(
                         "Rozpoznanie radaru wymaga dwóch sygnałów BLE. Nie oznacza połączenia GATT " +
                         "i nie zakłóca komunikacji z Garminem. Otwieranie na rowerze wymaga " +
-                        "dodatkowo satelitarnego fixu GPS. Po zmianie adresu BLE wybierz radar ponownie.",
+                        "dodatkowo satelitarnego fixu GPS. Radar jest rozpoznawany po adresie BLE " +
+                        "lub po nazwie; po wymianie urządzenia wybierz je ponownie.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
