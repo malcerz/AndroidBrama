@@ -344,7 +344,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             Text(
                                 "Przed automatycznym otwarciem wymagaj nowego fixu satelitarnego. " +
                                     "Chroni przed otwarciem w garażu po uruchomieniu Android Auto. " +
-                                    "Dla radaru L508 fix jest zawsze wymagany.",
+                                    "Dotyczy tylko Android Auto; na rowerze działa karencja radaru.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -420,8 +420,10 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     }
                     Text(
                         "Rozpoznanie radaru wymaga dwóch sygnałów BLE. Nie oznacza połączenia GATT " +
-                        "i nie zakłóca komunikacji z Garminem. Otwieranie na rowerze wymaga " +
-                        "dodatkowo satelitarnego fixu GPS. Radar jest rozpoznawany po adresie BLE " +
+                        "i nie zakłóca komunikacji z Garminem. Przez 10 minut od wykrycia radaru " +
+                        "brama nie jest otwierana (karencja — radar włączony w garażu nie otworzy " +
+                        "bramy); otwiera się dopiero po odjechaniu i ponownym wjeździe w strefę. " +
+                        "Krótka utrata sygnału w trasie nie restartuje karencji. Radar jest rozpoznawany po adresie BLE " +
                         "lub po nazwie; po wymianie urządzenia wybierz je ponownie.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -491,9 +493,10 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Fix GPS:", style = MaterialTheme.typography.bodyMedium)
-                        val gpsRequired = waitForGpsFix ||
-                            (radarConfig.enabled && radarPresent &&
-                                carConnectionType != CarConnection.CONNECTION_TYPE_PROJECTION)
+                        // Mirrors TrackingPolicy: on the bike fused location is used instead.
+                        val cycling = radarConfig.enabled && radarPresent &&
+                            carConnectionType != CarConnection.CONNECTION_TYPE_PROJECTION
+                        val gpsRequired = waitForGpsFix && !cycling
                         val fixLabel = when {
                             !isGpsActive -> "NIEAKTYWNY"
                             hasSatelliteFix -> "FIX GPS"
