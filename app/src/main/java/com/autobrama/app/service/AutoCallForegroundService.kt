@@ -124,6 +124,7 @@ class AutoCallForegroundService : Service() {
     private var satelliteOnly = false
     private var gpsSessionStartedNanos = 0L
     private var trackingDecision = TrackingDecision(false, true)
+    private val radarGrace = RadarGrace()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val satelliteFixTimeout = Runnable {
         if (locationListening && satelliteOnly) {
@@ -190,12 +191,14 @@ class AutoCallForegroundService : Service() {
                     applicationContext,
                     selected.enabled,
                     selected.address,
-                    selected.name
+                    selected.name,
+                    selected.signature
                 )
 
                 val activeSlots = config.slots.any {
                     it.enabled && it.phoneNumber.isNotBlank()
                 }
+                radarGrace.update(config.radarPresent, SystemClock.elapsedRealtime())
                 trackingDecision = TrackingPolicy.evaluate(
                     requireAndroidAuto = config.requireAA,
                     waitForGpsFix = config.waitForGpsFix,
@@ -443,8 +446,19 @@ class AutoCallForegroundService : Service() {
                 // One GPS update can trigger at most one GSM request.
                 // Treat other overlapping zones as triggered too, avoiding
                 // a second call after service restarts.
+                val graceLeft = if (trackingDecision.cycling)
+                    radarGrace.remaining(SystemClock.elapsedRealtime()) else 0L
                 val selected = triggerCandidates.minByOrNull { it.second }
-                if (selected != null) {
+                if (selected != null && graceLeft > 0L) {
+                    // Radar just switched on (e.g. in the garage): treat the gate as
+                    // handled, so it re-arms only after riding out of radius + hysteresis.
+                    nextLatches.addAll(triggerCandidates.map { it.first.id })
+                    Log.i(TAG, "Karencja radaru: pominięto ${selected.first.name}")
+                    updateNotification(
+                        "Karencja radaru (${graceMinutes(graceLeft)} min): " +
+                            "${selected.first.name} nie zostanie otwarta, dopóki nie odjedziesz"
+                    )
+                } else if (selected != null) {
                     val (slot, distance) = selected
                     val now = System.currentTimeMillis()
                     val lastCall = maxOf(
@@ -497,7 +511,10 @@ class AutoCallForegroundService : Service() {
                             "Brama ${closest.slot.name}: wyzwolenie już obsłużone"
                         else -> "Najbliżej: ${closest.slot.name} (${closest.distanceMeters.toInt()} m)"
                     }
-                    updateNotification(status)
+                    updateNotification(
+                        if (graceLeft > 0L) "$status · karencja radaru ${graceMinutes(graceLeft)} min"
+                        else status
+                    )
                 }
 
                 if (nextLatches != savedLatches) {
@@ -506,6 +523,8 @@ class AutoCallForegroundService : Service() {
             }
         }
     }
+
+    private fun graceMinutes(millis: Long): Long = (millis + 59_999L) / 60_000L
 
     /** true = request sent to Telecom; it does not prove that the call connected. */
     private fun placeGateCall(phoneNumber: String, gateName: String): Boolean {

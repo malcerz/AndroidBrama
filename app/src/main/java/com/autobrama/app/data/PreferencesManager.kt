@@ -17,7 +17,13 @@ import kotlinx.coroutines.flow.map
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "autobrama_settings")
 
-data class RadarConfig(val enabled: Boolean, val address: String, val name: String)
+data class RadarConfig(
+    val enabled: Boolean,
+    val address: String,
+    val name: String,
+    /** Advertised manufacturer IDs / service UUIDs, used as extra scan filters. */
+    val signature: String = ""
+)
 
 class PreferencesManager(private val context: Context) {
 
@@ -30,6 +36,7 @@ class PreferencesManager(private val context: Context) {
         val KEY_RADAR_ENABLED = booleanPreferencesKey("radar_ble_enabled")
         val KEY_RADAR_ADDRESS = stringPreferencesKey("radar_ble_address")
         val KEY_RADAR_NAME = stringPreferencesKey("radar_ble_name")
+        val KEY_RADAR_SIGNATURE = stringPreferencesKey("radar_ble_signature")
         private val KEY_LATCHED_GATES = stringSetPreferencesKey("gate_call_latched_slot_ids")
 
         // Klucze legacy dla wstecznej kompatybilności i migracji
@@ -60,11 +67,12 @@ class PreferencesManager(private val context: Context) {
         RadarConfig(
             prefs[KEY_RADAR_ENABLED] ?: false,
             prefs[KEY_RADAR_ADDRESS] ?: "",
-            prefs[KEY_RADAR_NAME] ?: ""
+            prefs[KEY_RADAR_NAME] ?: "",
+            prefs[KEY_RADAR_SIGNATURE] ?: ""
         )
     }
 
-    suspend fun setRadarConfig(enabled: Boolean, address: String, name: String) {
+    suspend fun setRadarConfig(enabled: Boolean, address: String, name: String, signature: String = "") {
         val normalized = address.trim().uppercase()
         require(normalized.isEmpty() ||
             normalized.matches(Regex("([0-9A-F]{2}:){5}[0-9A-F]{2}"))) {
@@ -74,6 +82,7 @@ class PreferencesManager(private val context: Context) {
             prefs[KEY_RADAR_ENABLED] = enabled && normalized.isNotBlank()
             prefs[KEY_RADAR_ADDRESS] = normalized
             prefs[KEY_RADAR_NAME] = name.take(80)
+            prefs[KEY_RADAR_SIGNATURE] = signature.take(400)
         }
     }
 
@@ -188,6 +197,7 @@ class PreferencesManager(private val context: Context) {
             preferences[KEY_RADAR_ENABLED] = safe.radarConfig.enabled
             preferences[KEY_RADAR_ADDRESS] = safe.radarConfig.address
             preferences[KEY_RADAR_NAME] = safe.radarConfig.name
+            preferences[KEY_RADAR_SIGNATURE] = safe.radarConfig.signature
         }
     }
 

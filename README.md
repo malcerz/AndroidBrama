@@ -161,3 +161,9 @@ Aplikacja deklaruje w `AndroidManifest.xml` następujące uprawnienia:
 ## 📄 Licencja
 
 Projekt udostępniony na licencji MIT (lub dowolnej wybranej przez autora).
+
+### Radar rowerowy (BLE) — karencja zamiast fixu GPS
+
+Na rowerze telefon zwykle jest w kieszeni, więc tryb radaru nie wymaga satelitarnego fixu GPS (używana jest lokalizacja fused). Zamiast tego przez **10 minut od wykrycia radaru** aplikacja nie otwiera bramy: jeśli w tym czasie jesteś w strefie (np. radar włączony w garażu), brama jest oznaczana jako obsłużona i uzbraja się dopiero po odjechaniu na `promień + histereza`. Krótka utrata sygnału radaru w trasie nie restartuje karencji; nowa karencja zaczyna się dopiero po ponad 10 minutach bez sygnału. Checkbox **Czekaj na GPS** dotyczy wyłącznie Android Auto.
+
+Lista wykrytych urządzeń BLE zachowuje kolejność wykrycia (nowe dopisywane na końcu), prawdopodobne radary są na górze, urządzenia bez nazwy są domyślnie ukryte. Status pokazuje, kiedy wybrane urządzenie było ostatnio słyszane.

@@ -24,6 +24,7 @@ data class SettingsBackup(
         put("radarEnabled", radarConfig.enabled)
         put("radarAddress", radarConfig.address)
         put("radarName", radarConfig.name)
+        put("radarSignature", radarConfig.signature)
         put("slots", JSONArray().apply {
             slots.sortedBy { it.id }.forEach { put(it.toJsonObject()) }
         })
@@ -88,6 +89,7 @@ data class SettingsBackup(
                 val radarEnabled = root.optBoolean("radarEnabled", false)
                 val radarAddress = root.optString("radarAddress", "").trim().uppercase()
                 val radarName = root.optString("radarName", "").take(80)
+                val radarSignature = root.optString("radarSignature", "").take(400)
                 require(radarAddress.isEmpty() ||
                     radarAddress.matches(Regex("([0-9A-F]{2}:){5}[0-9A-F]{2}"))) {
                     "Nieprawidłowy adres radaru BLE."
@@ -99,7 +101,7 @@ data class SettingsBackup(
                     automationEnabled = root.getBoolean("automationEnabled"),
                     requireAndroidAuto = root.getBoolean("requireAndroidAuto"),
                     slots = slots.sortedBy { it.id },
-                    radarConfig = RadarConfig(radarEnabled, radarAddress, radarName),
+                    radarConfig = RadarConfig(radarEnabled, radarAddress, radarName, radarSignature),
                     // v1/v2 backups had no switch; choose the safe default.
                     waitForGpsFix = if (root.has("waitForGpsFix")) root.getBoolean("waitForGpsFix") else true
                 )
