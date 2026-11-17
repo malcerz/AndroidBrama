@@ -136,7 +136,10 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
     fun selectRadar(device: NearbyBleDevice) {
         viewModelScope.launch {
             prefs.setRadarConfig(true, device.address, device.name)
-            _userMessage.value = "Wybrano radar ${device.name}. Wykrycie BLE może uruchamiać GPS."
+            // End discovery at once so the filtered monitoring scan starts and the
+            // status line shows straight away whether the selected device is heard.
+            RadarBleManager.stopDiscovery()
+            _userMessage.value = "Wybrano ${device.name}. Status poniżej pokazuje, czy nasłuch go odbiera."
         }
     }
 

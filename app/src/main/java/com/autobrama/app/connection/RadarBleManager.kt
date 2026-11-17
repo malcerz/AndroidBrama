@@ -2,6 +2,7 @@ package com.autobrama.app.connection
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
@@ -17,6 +18,7 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelUuid
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -25,7 +27,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class NearbyBleDevice(val address: String, val name: String, val rssi: Int)
+data class NearbyBleDevice(
+    val address: String,
+    val name: String,
+    val rssi: Int,
+    /** Name or advertised service suggests a bike radar (Magene, Garmin Varia…). */
+    val likelyRadar: Boolean = false
+) {
+    val hasName: Boolean get() = name.isNotBlank() && name != "(bez nazwy)"
+}
 
 /**
  * Passive BLE radar detection, without GATT pairing or disrupting ANT+.
@@ -43,6 +53,12 @@ object RadarBleManager {
     // (about 30 minutes), so a monitoring scan is restarted before that.
     private const val SCAN_RESTART_MS = 25 * 60_000L
     private const val NO_NAME = "(bez nazwy)"
+    // The discovery list is redrawn at most this often, so it does not flicker.
+    private const val LIST_PUBLISH_MS = 1_000L
+    private val RADAR_NAME = Regex("magene|l508|l315|radar|varia|rtl\\d|rct\\d|19813", RegexOption.IGNORE_CASE)
+    // Garmin Varia radar service; Magene and other radars that speak the same
+    // protocol advertise it too.
+    private val RADAR_SERVICE = ParcelUuid.fromString("6a4e3200-667b-11e3-949a-0800200c9a66")
 
     private val handler = Handler(Looper.getMainLooper())
     private val tracker = RadarPresenceTracker()
@@ -65,16 +81,28 @@ object RadarBleManager {
     private var scanStartedAt = 0L
     private var nextRetryAfter = 0L
     private var stateReceiverRegistered = false
+    private var lastListPublish = 0L
+    private var listPublishPending = false
+    private var targetLastSeenAt = -1L
+    private var targetLastRssi = 0
+
+    private val publishList = Runnable {
+        listPublishPending = false
+        lastListPublish = SystemClock.elapsedRealtime()
+        // Insertion order = order of first sighting: new devices are appended at the
+        // end and existing rows never move (RSSI is updated in place).
+        _devices.value = found.values.toList()
+    }
 
     private val heartbeat = Runnable {
         val now = SystemClock.elapsedRealtime()
         val fresh = monitor && tracker.isNearby(now)
         if (_present.value != fresh) {
             _present.value = fresh
-            if (!fresh && monitor) {
-                _status.value = "Brak świeżego sygnału radaru BLE " +
-                    "(${RadarPresenceTracker.DEFAULT_HOLD_MILLIS / 1000} s)"
-            }
+        }
+        // Only while a scan is actually running, so scan errors stay visible.
+        if (monitor && !fresh && discoveryUntil <= now && scanner != null) {
+            _status.value = targetStatus(now)
         }
         // Re-validates Bluetooth, location and permissions, ends an expired
         // discovery, restarts a failed or long-running scan and reschedules
@@ -139,6 +167,8 @@ object RadarBleManager {
         handler.post {
             this.context = app
             found.clear()
+            handler.removeCallbacks(publishList)
+            listPublishPending = false
             _devices.value = emptyList()
             discoveryUntil = SystemClock.elapsedRealtime() + DISCOVERY_MS
             nextRetryAfter = 0L
@@ -156,6 +186,16 @@ object RadarBleManager {
     private fun clearPresence() {
         tracker.reset()
         _present.value = false
+        targetLastSeenAt = -1L
+    }
+
+    /** Shows whether the selected device is heard at all, which makes problems diagnosable. */
+    private fun targetStatus(now: Long): String {
+        val label = targetName.ifBlank { targetAddress }
+        if (targetLastSeenAt < 0) return "Nasłuch: $label — brak sygnału od startu nasłuchu"
+        val ago = (now - targetLastSeenAt) / 1000
+        return "Nasłuch: $label — ostatni sygnał $ago s temu ($targetLastRssi dBm)" +
+            if (ago > RadarPresenceTracker.DEFAULT_HOLD_MILLIS / 1000) "; za stary" else ""
     }
 
     private fun isUsableName(name: String): Boolean = name.isNotBlank() && name != NO_NAME
@@ -246,18 +286,20 @@ object RadarBleManager {
                 return
             }
             // Discovery is short and runs with the screen on, so it may listen
-            // continuously; background monitoring stays in low-power mode.
+            // continuously. LOW_POWER listened only ~10% of the time, which on
+            // many phones was too sparse for a radar advertising every few
+            // seconds; BALANCED (~25%) with a hardware filter is still cheap.
             val settings = ScanSettings.Builder()
                 .setScanMode(
                     if (discovering) ScanSettings.SCAN_MODE_LOW_LATENCY
-                    else ScanSettings.SCAN_MODE_LOW_POWER
+                    else ScanSettings.SCAN_MODE_BALANCED
                 )
                 .build()
             // A filtered scan can continue while the Android screen is off.
             // Filters are alternatives: the saved address, or the advertised
             // name when the radar shows up under a different (random) address.
             val filters: List<ScanFilter> = if (discovering) emptyList() else buildList {
-                add(ScanFilter.Builder().setDeviceAddress(targetAddress).build())
+                addAll(addressFilters(targetAddress))
                 if (isUsableName(targetName)) {
                     add(ScanFilter.Builder().setDeviceName(targetName).build())
                 }
@@ -300,6 +342,36 @@ object RadarBleManager {
         }
     }
 
+    /**
+     * Since Android 13 ScanFilter.setDeviceAddress(address) assumes a PUBLIC address.
+     * Bike radars (Magene, Varia…) use a static RANDOM address (first byte C0–FF),
+     * so the hardware filter silently never matched: the radar was visible during
+     * the unfiltered discovery, then "disappeared" once monitoring started.
+     * Both address types are registered, because the type cannot be read before API 35.
+     */
+    private fun addressFilters(address: String): List<ScanFilter> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return listOf(ScanFilter.Builder().setDeviceAddress(address).build())
+        }
+        return listOf(BluetoothDevice.ADDRESS_TYPE_RANDOM, BluetoothDevice.ADDRESS_TYPE_PUBLIC)
+            .mapNotNull { type ->
+                try {
+                    ScanFilter.Builder().setDeviceAddress(address, type).build()
+                } catch (e: IllegalArgumentException) {
+                    Log.w(TAG, "Address filter type $type rejected", e)
+                    null
+                }
+            }
+            .ifEmpty { listOf(ScanFilter.Builder().setDeviceAddress(address).build()) }
+    }
+
+    private fun schedulePublishList(now: Long) {
+        if (listPublishPending) return
+        listPublishPending = true
+        val wait = (lastListPublish + LIST_PUBLISH_MS - now).coerceAtLeast(0L)
+        handler.postDelayed(publishList, wait)
+    }
+
     @Suppress("MissingPermission")
     private fun record(result: ScanResult) {
         val address = try { result.device.address?.uppercase() ?: return }
@@ -310,16 +382,30 @@ object RadarBleManager {
             ?: NO_NAME
         val now = SystemClock.elapsedRealtime()
         if (discoveryUntil > now) {
-            found[address] = NearbyBleDevice(address, name, result.rssi)
-            _devices.value = found.values.sortedByDescending { it.rssi }.take(60)
+            val previous = found[address]
+            // A name often arrives only in the scan response: keep the best one seen.
+            val bestName = if (name == NO_NAME && previous != null) previous.name else name
+            val radarService = result.scanRecord?.serviceUuids?.contains(RADAR_SERVICE) == true
+            val likely = previous?.likelyRadar == true || radarService ||
+                RADAR_NAME.containsMatchIn(bestName)
+            if (previous != null || found.size < 200) {
+                // Re-putting an existing key keeps its position in the LinkedHashMap.
+                found[address] = NearbyBleDevice(address, bestName, result.rssi, likely)
+                schedulePublishList(now)
+            }
         }
         val isTarget = address == targetAddress ||
             (isUsableName(targetName) && name == targetName)
         if (monitor && isTarget) {
+            targetLastSeenAt = now
+            targetLastRssi = result.rssi
             tracker.seen(now)
             if (tracker.isNearby(now)) {
                 _present.value = true
                 _status.value = "Radar w pobliżu: $name (${result.rssi} dBm)"
+            } else if (discoveryUntil <= now) {
+                _status.value = "Nasłuch: ${targetName.ifBlank { targetAddress }} — sygnał odebrany, " +
+                    "czekam na potwierdzenie (${result.rssi} dBm)"
             }
         }
     }

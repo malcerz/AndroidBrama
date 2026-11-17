@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -411,19 +412,11 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Wyszukaj urządzenia BLE (30 s)") }
                     if (radarDevices.isNotEmpty()) {
-                        Text(
-                            "Wybierz swój radar (np. 19813-5 / L508):",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium
+                        RadarDeviceList(
+                            devices = radarDevices,
+                            selectedAddress = radarConfig.address,
+                            onSelect = { viewModel.selectRadar(it) }
                         )
-                        radarDevices.take(12).forEach { device ->
-                            TextButton(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = { viewModel.selectRadar(device) }
-                            ) {
-                                Text("${device.name}  ·  ${device.address}  ·  ${device.rssi} dBm")
-                            }
-                        }
                     }
                     Text(
                         "Rozpoznanie radaru wymaga dwóch sygnałów BLE. Nie oznacza połączenia GATT " +
@@ -947,5 +940,62 @@ fun BadgeBox(text: String, backgroundColor: Color) {
             .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Text(text = text, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/**
+ * Stable discovery list: rows keep the order in which devices were first seen
+ * (new ones are appended at the end, RSSI changes in place). Likely radars are
+ * listed first, devices without a name are hidden unless requested.
+ */
+@Composable
+private fun RadarDeviceList(
+    devices: List<com.autobrama.app.connection.NearbyBleDevice>,
+    selectedAddress: String,
+    onSelect: (com.autobrama.app.connection.NearbyBleDevice) -> Unit
+) {
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val radars = devices.filter { it.likelyRadar }
+    val others = devices.filter { !it.likelyRadar && (showAll || it.hasName) }
+    val hidden = devices.count { !it.likelyRadar && !it.hasName }
+
+    @Composable
+    fun row(device: com.autobrama.app.connection.NearbyBleDevice) {
+        val selected = device.address.equals(selectedAddress, ignoreCase = true)
+        TextButton(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = { onSelect(device) }
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        (if (selected) "✓ " else "") + device.name,
+                        fontWeight = if (selected || device.likelyRadar) FontWeight.Bold else FontWeight.Normal
+                    )
+                    Text(device.address, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text("${device.rssi} dBm", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+
+    if (radars.isNotEmpty()) {
+        Text("Prawdopodobne radary:", style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium)
+        radars.forEach { row(it) }
+    }
+    Text(
+        if (radars.isEmpty()) "Wybierz swój radar (nowe urządzenia są dopisywane na końcu):"
+        else "Pozostałe urządzenia:",
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium
+    )
+    others.forEach { row(it) }
+    if (hidden > 0) {
+        TextButton(onClick = { showAll = !showAll }) {
+            Text(if (showAll) "Ukryj urządzenia bez nazwy"
+                 else "Pokaż urządzenia bez nazwy ($hidden)")
+        }
     }
 }
