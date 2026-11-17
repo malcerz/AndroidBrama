@@ -135,7 +135,7 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
 
     fun selectRadar(device: NearbyBleDevice) {
         viewModelScope.launch {
-            prefs.setRadarConfig(true, device.address, device.name)
+            prefs.setRadarConfig(true, device.address, device.name, device.signature)
             // End discovery at once so the filtered monitoring scan starts and the
             // status line shows straight away whether the selected device is heard.
             RadarBleManager.stopDiscovery()
@@ -150,7 +150,7 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
                 _userMessage.value = "Najpierw wyszukaj i wybierz radar."
                 return@launch
             }
-            prefs.setRadarConfig(enabled, previous.address, previous.name)
+            prefs.setRadarConfig(enabled, previous.address, previous.name, previous.signature)
             _userMessage.value = if (enabled)
                 "Wykrycie radaru może aktywować GPS także bez Android Auto."
             else "Wykrywanie radaru wyłączone."

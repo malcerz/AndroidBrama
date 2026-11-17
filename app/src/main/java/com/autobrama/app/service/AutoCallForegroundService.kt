@@ -191,7 +191,8 @@ class AutoCallForegroundService : Service() {
                     applicationContext,
                     selected.enabled,
                     selected.address,
-                    selected.name
+                    selected.name,
+                    selected.signature
                 )
 
                 val activeSlots = config.slots.any {

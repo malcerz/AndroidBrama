@@ -2,7 +2,6 @@ package com.autobrama.app.connection
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
@@ -32,7 +31,9 @@ data class NearbyBleDevice(
     val name: String,
     val rssi: Int,
     /** Name or advertised service suggests a bike radar (Magene, Garmin Varia…). */
-    val likelyRadar: Boolean = false
+    val likelyRadar: Boolean = false,
+    /** "m:XXXX" manufacturer IDs and "s:uuid" service UUIDs seen in its advertisements. */
+    val signature: String = ""
 ) {
     val hasName: Boolean get() = name.isNotBlank() && name != "(bez nazwy)"
 }
@@ -74,6 +75,7 @@ object RadarBleManager {
     private var monitor = false
     private var targetAddress = ""
     private var targetName = ""
+    private var targetSignature = ""
     private var discoveryUntil = 0L
     private var scanner: BluetoothLeScanner? = null
     private var scanCallback: ScanCallback? = null
@@ -146,7 +148,13 @@ object RadarBleManager {
         return fine
     }
 
-    fun setMonitoring(context: Context, enabled: Boolean, address: String, name: String) {
+    fun setMonitoring(
+        context: Context,
+        enabled: Boolean,
+        address: String,
+        name: String,
+        signature: String = ""
+    ) {
         val app = context.applicationContext
         handler.post {
             this.context = app
@@ -156,6 +164,7 @@ object RadarBleManager {
                 clearPresence()
             }
             targetName = name
+            targetSignature = signature
             monitor = enabled && normalized.isNotBlank()
             if (!monitor) clearPresence()
             updateScanner(app)
@@ -274,7 +283,8 @@ object RadarBleManager {
             _status.value = "Lokalizacja w telefonie jest wyłączona – skan BLE nie działa"
             return
         }
-        val newFilterKey = if (discovering) "discover" else "target:$targetAddress|$targetName"
+        val newFilterKey = if (discovering) "discover"
+            else "target:$targetAddress|$targetName|$targetSignature"
         val tooOld = !discovering && scanner != null && now - scanStartedAt >= SCAN_RESTART_MS
         if (scanner != null && filterKey == newFilterKey && !tooOld) return
         if (now < nextRetryAfter) return
@@ -296,13 +306,18 @@ object RadarBleManager {
                 )
                 .build()
             // A filtered scan can continue while the Android screen is off.
-            // Filters are alternatives: the saved address, or the advertised
-            // name when the radar shows up under a different (random) address.
+            // Filters are alternatives (any match is delivered; record() then
+            // accepts only the selected address or name): the saved address,
+            // the advertised name, and the manufacturer IDs / service UUIDs the
+            // device advertised during discovery. The extra ones matter because
+            // a hardware address filter may not match a random-address radar
+            // and the name is often sent only in the scan response.
             val filters: List<ScanFilter> = if (discovering) emptyList() else buildList {
-                addAll(addressFilters(targetAddress))
+                add(ScanFilter.Builder().setDeviceAddress(targetAddress).build())
                 if (isUsableName(targetName)) {
                     add(ScanFilter.Builder().setDeviceName(targetName).build())
                 }
+                addAll(signatureFilters(targetSignature))
             }
             val callback = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -342,27 +357,41 @@ object RadarBleManager {
         }
     }
 
-    /**
-     * Since Android 13 ScanFilter.setDeviceAddress(address) assumes a PUBLIC address.
-     * Bike radars (Magene, Varia…) use a static RANDOM address (first byte C0–FF),
-     * so the hardware filter silently never matched: the radar was visible during
-     * the unfiltered discovery, then "disappeared" once monitoring started.
-     * Both address types are registered, because the type cannot be read before API 35.
-     */
-    private fun addressFilters(address: String): List<ScanFilter> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            return listOf(ScanFilter.Builder().setDeviceAddress(address).build())
-        }
-        return listOf(BluetoothDevice.ADDRESS_TYPE_RANDOM, BluetoothDevice.ADDRESS_TYPE_PUBLIC)
-            .mapNotNull { type ->
-                try {
-                    ScanFilter.Builder().setDeviceAddress(address, type).build()
-                } catch (e: IllegalArgumentException) {
-                    Log.w(TAG, "Address filter type $type rejected", e)
-                    null
+    private fun signatureFilters(signature: String): List<ScanFilter> =
+        signature.split(',').mapNotNull { token ->
+            try {
+                when {
+                    token.startsWith("m:") -> ScanFilter.Builder()
+                        .setManufacturerData(token.substring(2).toInt(16), ByteArray(0))
+                        .build()
+                    token.startsWith("s:") -> ScanFilter.Builder()
+                        .setServiceUuid(ParcelUuid.fromString(token.substring(2)))
+                        .build()
+                    else -> null
                 }
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Bad radar signature token $token", e)
+                null
             }
-            .ifEmpty { listOf(ScanFilter.Builder().setDeviceAddress(address).build()) }
+        }
+
+    /**
+     * Manufacturer IDs and service UUIDs, without the very common Apple/Microsoft
+     * IDs that would wake the app for every phone and tracker nearby.
+     */
+    private fun signatureOf(result: ScanResult, previous: String): String {
+        val tokens = linkedSetOf<String>()
+        previous.split(',').filter { it.isNotBlank() }.forEach { tokens += it }
+        val record = result.scanRecord ?: return tokens.joinToString(",")
+        val manufacturers = record.manufacturerSpecificData
+        if (manufacturers != null) {
+            for (i in 0 until manufacturers.size()) {
+                val id = manufacturers.keyAt(i)
+                if (id != 0x004C && id != 0x0006) tokens += "m:%04X".format(id)
+            }
+        }
+        record.serviceUuids?.forEach { tokens += "s:$it" }
+        return tokens.take(6).joinToString(",")
     }
 
     private fun schedulePublishList(now: Long) {
@@ -390,7 +419,10 @@ object RadarBleManager {
                 RADAR_NAME.containsMatchIn(bestName)
             if (previous != null || found.size < 200) {
                 // Re-putting an existing key keeps its position in the LinkedHashMap.
-                found[address] = NearbyBleDevice(address, bestName, result.rssi, likely)
+                found[address] = NearbyBleDevice(
+                    address, bestName, result.rssi, likely,
+                    signatureOf(result, previous?.signature ?: "")
+                )
                 schedulePublishList(now)
             }
         }
