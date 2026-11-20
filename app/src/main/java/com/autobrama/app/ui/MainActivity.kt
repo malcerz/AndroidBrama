@@ -81,7 +81,6 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isAutomationEnabled by viewModel.isAutomationEnabled.collectAsState()
     val requireAndroidAuto by viewModel.requireAndroidAuto.collectAsState()
-    val waitForGpsFix by viewModel.waitForGpsFix.collectAsState()
     val radarConfig by viewModel.radarConfig.collectAsState()
     val radarPresent by viewModel.radarPresent.collectAsState()
     val radarDevices by viewModel.radarDevices.collectAsState()
@@ -91,7 +90,6 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
     val isGpsActive by viewModel.isGpsActive.collectAsState()
-    val hasSatelliteFix by viewModel.hasSatelliteFix.collectAsState()
     val serviceStatusMessage by viewModel.serviceStatusMessage.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
     val closestGateStatus by viewModel.closestGateStatus.collectAsState()
@@ -297,7 +295,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
                     HorizontalDivider()
 
-                    // Przełącznik sprawdzania Android Auto (tryb testowy bez auta)
+                    // Dwa niezależne warunki aktywacji GPS: Android Auto i urządzenie BT.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -312,13 +310,9 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = if (requireAndroidAuto)
-                                    if (radarConfig.enabled) "GPS uruchamia Android Auto lub radar Magene"
-                                    else "GPS włącza się tylko w aucie (oszczędza baterię)"
-                                else
-                                    "Tryb testowy (bez auta) – GPS aktywny od razu",
+                                text = "GPS włącza się, gdy telefon jest połączony z Android Auto",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (!requireAndroidAuto) Color(0xFFC62828) else Color.DarkGray
+                                color = Color.DarkGray
                             )
                         }
                         Switch(
@@ -333,44 +327,25 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                            checked = waitForGpsFix,
-                            onCheckedChange = { viewModel.toggleWaitForGpsFix(it) }
-                        )
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Czekaj na GPS", fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Przed automatycznym otwarciem wymagaj nowego fixu satelitarnego. " +
-                                    "Chroni przed otwarciem w garażu po uruchomieniu Android Auto. " +
-                                    "Dotyczy tylko Android Auto; na rowerze działa karencja radaru.",
+                                text = "Wymagaj urządzenia BT",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (radarConfig.address.isBlank())
+                                    "Najpierw wybierz urządzenie z listy poniżej"
+                                else "GPS włącza się po wykryciu: ${radarConfig.name}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = Color.DarkGray
                             )
                         }
-                    }
-                }
-            }
-
-            // RADAR BLE: wybór rzeczywistego urządzenia oraz czujnik obecności.
-            Card(modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Magene L508 — wykrywanie BLE",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary)
-                    Row(modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text("Radar aktywuje GPS również bez Android Auto",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium)
                         Switch(
                             checked = radarConfig.enabled,
                             enabled = radarConfig.address.isNotBlank(),
@@ -379,16 +354,41 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             }
                         )
                     }
+
+                    if (!requireAndroidAuto && !radarConfig.enabled) {
+                        Text(
+                            text = "Oba warunki wyłączone – GPS jest aktywny cały czas " +
+                                "(tryb testowy).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFC62828)
+                        )
+                    }
+                }
+            }
+
+            // Urządzenie BT: dowolne urządzenie BLE wskazane z listy (np. lokalizator).
+            Card(modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Urządzenie Bluetooth (BLE)",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary)
                     Text(
                         text = if (radarConfig.address.isBlank())
-                            "Brak wybranego radaru. Włącz L508 i wybierz go z listy."
+                            "Brak wybranego urządzenia. Włącz je i wybierz z listy."
                         else "Wybrano: ${radarConfig.name} (${radarConfig.address})",
                         style = MaterialTheme.typography.bodySmall
                     )
                     Text(
-                        text = if (radarPresent) "RADAR W POBLIŻU — sygnał BLE potwierdzony"
-                            else if (radarConfig.enabled) "Radar nie został wykryty"
-                            else "Monitorowanie radaru wyłączone",
+                        text = if (radarPresent) "URZĄDZENIE W POBLIŻU — sygnał BLE potwierdzony"
+                            else if (radarConfig.address.isBlank()) "Nie wybrano urządzenia"
+                            else if (!isServiceRunning) "Nasłuch nie działa — włącz automatyzację"
+                            else "Urządzenie nie zostało wykryte",
                         color = if (radarPresent) Color(0xFF2E7D32) else Color.Gray,
                         fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.bodySmall
@@ -419,12 +419,13 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         )
                     }
                     Text(
-                        "Rozpoznanie radaru wymaga dwóch sygnałów BLE. Nie oznacza połączenia GATT " +
-                        "i nie zakłóca komunikacji z Garminem. Przez 10 minut od wykrycia radaru " +
-                        "brama nie jest otwierana (karencja — radar włączony w garażu nie otworzy " +
-                        "bramy); otwiera się dopiero po odjechaniu i ponownym wjeździe w strefę. " +
-                        "Krótka utrata sygnału w trasie nie restartuje karencji. Radar jest rozpoznawany po adresie BLE " +
-                        "lub po nazwie; po wymianie urządzenia wybierz je ponownie.",
+                        "Wykrycie wymaga dwóch sygnałów BLE; aplikacja tylko nasłuchuje " +
+                        "(bez parowania i połączenia). Po wykryciu urządzenia każda brama ma " +
+                        "własną karencję (ustawienia bramy): w tym czasie nie otworzy się, " +
+                        "a otworzy dopiero po odjechaniu i ponownym wjeździe w strefę. " +
+                        "Krótka utrata sygnału w trasie nie zaczyna karencji od nowa. " +
+                        "Przy Android Auto karencji nie ma. Urządzenie jest rozpoznawane " +
+                        "po adresie BLE lub nazwie.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -483,31 +484,6 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         BadgeBox(
                             text = if (isGpsActive) "GPS AKTYWNY" else if (isServiceRunning) "CZUWA (GPS OFF)" else "ZATRZYMANY",
                             backgroundColor = if (isGpsActive) Color(0xFF2196F3) else if (isServiceRunning) Color(0xFF00897B) else Color(0xFF9E9E9E)
-                        )
-                    }
-
-                    // Wyświetl satelitarny fix odrębnie od samego nasłuchu lokalizacji.
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Fix GPS:", style = MaterialTheme.typography.bodyMedium)
-                        // Mirrors TrackingPolicy: on the bike fused location is used instead.
-                        val cycling = radarConfig.enabled && radarPresent &&
-                            carConnectionType != CarConnection.CONNECTION_TYPE_PROJECTION
-                        val gpsRequired = waitForGpsFix && !cycling
-                        val fixLabel = when {
-                            !isGpsActive -> "NIEAKTYWNY"
-                            hasSatelliteFix -> "FIX GPS"
-                            gpsRequired -> "CZEKAM NA FIX"
-                            else -> "NIEWYMAGANY"
-                        }
-                        BadgeBox(
-                            text = fixLabel,
-                            backgroundColor = if (hasSatelliteFix) Color(0xFF4CAF50)
-                                else if (isGpsActive && gpsRequired) Color(0xFFFFA000)
-                                else Color(0xFF9E9E9E)
                         )
                     }
 
@@ -666,7 +642,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     )
                     Text(
                         "Zapisz lub odtwórz 3 bramy, numery telefonów, współrzędne GPS, " +
-                        "odległości aktywacji, aktywne sloty, tryb Android Auto, czekanie na GPS i radar BLE. " +
+                        "odległości aktywacji, aktywne sloty, warunki Android Auto i urządzenia BT, karencje bram. " +
                         "Plik JSON zawiera prywatne dane – nie udostępniaj go publicznie.",
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -787,10 +763,15 @@ fun SlotConfigurationForm(
     var hysteresisText by remember(slot.id, slot.hysteresisMeters) {
         mutableStateOf(slot.hysteresisMeters.roundToInt().toString())
     }
+    var graceText by remember(slot.id, slot.graceMinutes) {
+        mutableStateOf(slot.graceMinutes.toString())
+    }
     val radiusValue = radiusText.toIntOrNull()
     val hysteresisValue = hysteresisText.toIntOrNull()
+    val graceValue = graceText.toIntOrNull()
     val radiusValid = radiusValue != null && radiusValue in 20..500
     val hysteresisValid = hysteresisValue != null && hysteresisValue in 0..2000
+    val graceValid = graceValue != null && graceValue in 0..GateLocationSlot.MAX_GRACE_MINUTES
     var isEnabled by remember(slot.id, slot.enabled) { mutableStateOf(slot.enabled) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -902,12 +883,28 @@ fun SlotConfigurationForm(
                 supportingText = { Text("Zakres 0–2000 m; domyślnie 150 m") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )
+            OutlinedTextField(
+                value = graceText,
+                onValueChange = { value ->
+                    if (value.length <= 3 && value.all { it.isDigit() }) graceText = value
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Karencja po wykryciu urządzenia BT") },
+                suffix = { Text("min") },
+                singleLine = true,
+                isError = !graceValid,
+                supportingText = {
+                    Text("0–${GateLocationSlot.MAX_GRACE_MINUTES} min; 0 = bez karencji. " +
+                        "Nie dotyczy Android Auto")
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
             Text(
-                text = if (radiusValid && hysteresisValid)
+                text = if (radiusValid && hysteresisValid && graceValid)
                     "Ponowne uzbrojenie po oddaleniu na co najmniej ${radiusValue!! + hysteresisValue!!} m (promień + histereza)"
-                else "Wprowadź poprawne odległości, aby zapisać ustawienia.",
+                else "Wprowadź poprawne wartości, aby zapisać ustawienia.",
                 fontSize = 12.sp,
-                color = if (radiusValid && hysteresisValid) Color.DarkGray
+                color = if (radiusValid && hysteresisValid && graceValid) Color.DarkGray
                     else MaterialTheme.colorScheme.error
             )
         }
@@ -920,12 +917,13 @@ fun SlotConfigurationForm(
                     phoneNumber = phoneInput,
                     radiusMeters = radiusValue!!.toFloat(),
                     hysteresisMeters = hysteresisValue!!.toFloat(),
+                    graceMinutes = graceValue!!,
                     enabled = isEnabled
                 )
                 onUpdateSlot(updated)
             },
             modifier = Modifier.fillMaxWidth(),
-            enabled = radiusValid && hysteresisValid,
+            enabled = radiusValid && hysteresisValid && graceValid,
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
         ) {
             Icon(Icons.Default.Save, contentDescription = null)
@@ -948,8 +946,8 @@ fun BadgeBox(text: String, backgroundColor: Color) {
 
 /**
  * Stable discovery list: rows keep the order in which devices were first seen
- * (new ones are appended at the end, RSSI changes in place). Likely radars are
- * listed first, devices without a name are hidden unless requested.
+ * (new ones are appended at the end, RSSI changes in place). Devices without a
+ * name are hidden unless requested.
  */
 @Composable
 private fun RadarDeviceList(
@@ -958,9 +956,8 @@ private fun RadarDeviceList(
     onSelect: (com.autobrama.app.connection.NearbyBleDevice) -> Unit
 ) {
     var showAll by rememberSaveable { mutableStateOf(false) }
-    val radars = devices.filter { it.likelyRadar }
-    val others = devices.filter { !it.likelyRadar && (showAll || it.hasName) }
-    val hidden = devices.count { !it.likelyRadar && !it.hasName }
+    val shown = devices.filter { showAll || it.hasName }
+    val hidden = devices.count { !it.hasName }
 
     @Composable
     fun row(device: com.autobrama.app.connection.NearbyBleDevice) {
@@ -973,7 +970,7 @@ private fun RadarDeviceList(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         (if (selected) "✓ " else "") + device.name,
-                        fontWeight = if (selected || device.likelyRadar) FontWeight.Bold else FontWeight.Normal
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
                     )
                     Text(device.address, style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -983,18 +980,12 @@ private fun RadarDeviceList(
         }
     }
 
-    if (radars.isNotEmpty()) {
-        Text("Prawdopodobne radary:", style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium)
-        radars.forEach { row(it) }
-    }
     Text(
-        if (radars.isEmpty()) "Wybierz swój radar (nowe urządzenia są dopisywane na końcu):"
-        else "Pozostałe urządzenia:",
+        "Wybierz urządzenie (nowe są dopisywane na końcu listy):",
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.Medium
     )
-    others.forEach { row(it) }
+    shown.forEach { row(it) }
     if (hidden > 0) {
         TextButton(onClick = { showAll = !showAll }) {
             Text(if (showAll) "Ukryj urządzenia bez nazwy"

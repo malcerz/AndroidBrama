@@ -1,52 +1,59 @@
 package com.autobrama.app.service
 
 /**
- * Monitoring authorization and location source are separate decisions.
- * A detected radar authorizes cycling mode. On the bike the phone usually sits
- * in a pocket, so a satellite-only fix is not required there; instead calls are
- * held back for a grace period after the radar appears (see [RadarGrace]).
+ * Whether GPS monitoring may run, and whether the gate calls are held back by
+ * the per-gate grace period ([cycling]).
  */
 internal data class TrackingDecision(
     val allowed: Boolean,
-    val satelliteOnly: Boolean,
     val cycling: Boolean = false
 )
 
+/**
+ * Two independent switches choose what activates monitoring:
+ *  - "Wymagaj Android Auto": active while Android Auto projection is connected,
+ *  - "Wymagaj urządzenia BT": active while the selected BLE device is nearby.
+ * Each enabled source is sufficient on its own. With both switches off,
+ * monitoring is always active (test mode without a car or device).
+ *
+ * The grace period applies only to a start caused by the BLE device: while
+ * Android Auto is connected the gate calls are never delayed.
+ */
 internal object TrackingPolicy {
     fun evaluate(
         requireAndroidAuto: Boolean,
-        waitForGpsFix: Boolean,
+        requireBtDevice: Boolean,
         androidAutoConnected: Boolean,
-        radarEnabled: Boolean,
-        radarPresent: Boolean
+        btDevicePresent: Boolean
     ): TrackingDecision {
-        val cycling = radarEnabled && radarPresent && !androidAutoConnected
-        val allowed = !requireAndroidAuto || androidAutoConnected || cycling
+        val androidAutoActive = requireAndroidAuto && androidAutoConnected
+        val deviceActive = requireBtDevice && btDevicePresent
+        val allowed = (!requireAndroidAuto && !requireBtDevice) ||
+            androidAutoActive || deviceActive
         return TrackingDecision(
             allowed = allowed,
-            // "Czekaj na GPS" applies to the car; cycling uses fused location.
-            satelliteOnly = waitForGpsFix && !cycling,
-            cycling = cycling
+            cycling = deviceActive && !androidAutoConnected
         )
     }
 }
 
 /**
- * Grace period after the radar is detected: turning the radar on in the garage
- * must not open the gate the rider is standing next to. During the grace period
- * a gate whose zone is entered is latched as "already handled", so it re-arms
- * only after leaving radius + hysteresis, exactly like after a real call.
+ * Tracks one "session" of the selected BLE device so a gate can be held back
+ * for its own grace period after the device appears: switching the device on in
+ * the garage must not open the gate the rider is standing next to. During the
+ * grace period a gate whose zone is entered is latched as "already handled",
+ * so it re-arms only after leaving radius + hysteresis, exactly like after a
+ * real call.
  *
- * A short loss of the radar signal during a ride does not start a new grace
- * period (that would block the gate on the way home); only an absence longer
- * than [newSessionAfterMillis] does. Times are monotonic (elapsedRealtime).
+ * A short loss of the signal during a ride does not start a new session (that
+ * would block the gate on the way home); only an absence longer than
+ * [newSessionAfterMillis] does. Times are monotonic (elapsedRealtime).
  */
 internal class RadarGrace(
-    private val graceMillis: Long = DEFAULT_GRACE_MILLIS,
-    private val newSessionAfterMillis: Long = DEFAULT_GRACE_MILLIS
+    private val newSessionAfterMillis: Long = DEFAULT_NEW_SESSION_MILLIS
 ) {
     companion object {
-        const val DEFAULT_GRACE_MILLIS = 10 * 60_000L
+        const val DEFAULT_NEW_SESSION_MILLIS = 10 * 60_000L
     }
 
     private var sessionStart = -1L
@@ -65,8 +72,9 @@ internal class RadarGrace(
         present = radarPresent
     }
 
-    /** Milliseconds of grace left; 0 when gate calls are allowed. */
-    fun remaining(now: Long): Long {
+    /** Milliseconds of a [graceMillis] period left; 0 when gate calls are allowed. */
+    fun remaining(now: Long, graceMillis: Long): Long {
+        if (graceMillis <= 0L) return 0L
         if (sessionStart < 0 || now < sessionStart) return graceMillis
         return (graceMillis - (now - sessionStart)).coerceAtLeast(0L)
     }

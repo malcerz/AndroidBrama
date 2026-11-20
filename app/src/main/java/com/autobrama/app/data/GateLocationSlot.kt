@@ -11,7 +11,9 @@ data class GateLocationSlot(
     val latitude: Double,
     val longitude: Double,
     val radiusMeters: Float,
-    val hysteresisMeters: Float = 150.0f
+    val hysteresisMeters: Float = 150.0f,
+    /** Minutes after the selected BT device appears during which this gate stays closed. */
+    val graceMinutes: Int = DEFAULT_GRACE_MINUTES
 ) {
     fun toJsonObject(): JSONObject {
         return JSONObject().apply {
@@ -23,10 +25,14 @@ data class GateLocationSlot(
             put("longitude", longitude)
             put("radiusMeters", radiusMeters.toDouble())
             put("hysteresisMeters", hysteresisMeters.toDouble())
+            put("graceMinutes", graceMinutes)
         }
     }
 
     companion object {
+        const val DEFAULT_GRACE_MINUTES = 10
+        const val MAX_GRACE_MINUTES = 240
+
         fun fromJsonObject(json: JSONObject): GateLocationSlot {
             return GateLocationSlot(
                 id = json.optInt("id", 1),
@@ -36,7 +42,9 @@ data class GateLocationSlot(
                 latitude = json.optDouble("latitude", 52.2297),
                 longitude = json.optDouble("longitude", 21.0122),
                 radiusMeters = json.optDouble("radiusMeters", 50.0).toFloat(),
-                hysteresisMeters = json.optDouble("hysteresisMeters", 150.0).toFloat()
+                hysteresisMeters = json.optDouble("hysteresisMeters", 150.0).toFloat(),
+                graceMinutes = json.optInt("graceMinutes", DEFAULT_GRACE_MINUTES)
+                    .coerceIn(0, MAX_GRACE_MINUTES)
             )
         }
 

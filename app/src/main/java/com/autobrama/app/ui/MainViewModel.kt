@@ -43,7 +43,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val requireAndroidAuto: StateFlow<Boolean> = prefs.requireAndroidAutoFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
-    val waitForGpsFix: StateFlow<Boolean> = prefs.waitForGpsFixFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
     val radarConfig: StateFlow<RadarConfig> = prefs.radarConfigFlow
@@ -60,7 +59,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val isServiceRunning: StateFlow<Boolean> = AutoCallForegroundService.isRunning
     val isGpsActive: StateFlow<Boolean> = AutoCallForegroundService.isGpsActive
-    val hasSatelliteFix: StateFlow<Boolean> = AutoCallForegroundService.hasSatelliteFix
     val closestGateStatus: StateFlow<ActiveGateStatus?> = AutoCallForegroundService.closestGateStatus
     val gateStatuses: StateFlow<Map<Int, ActiveGateStatus>> = AutoCallForegroundService.gateStatuses
     val serviceStatusMessage: StateFlow<String> = AutoCallForegroundService.statusMessage
@@ -86,15 +84,13 @@ fun toggleAutomation(enabled: Boolean, context: Context) {
             prefs.setAutomationEnabled(enabled)
             if (enabled) {
                 // Start a lightweight standby FGS from the visible UI. GPS runs
-                // only after Android Auto connects (unless AA is not required).
+                // only while Android Auto or the selected BT device is active.
                 val accepted = AutoCallForegroundService.startService(context)
                 if (!accepted) {
                     prefs.setAutomationEnabled(false)
                     _userMessage.value = "Nie uruchomiono usługi. Sprawdź dokładną lokalizację i uprawnienia."
                 } else {
-                    _userMessage.value = if (prefs.isAndroidAutoRequired())
-                        "Automatyzacja włączona; GPS oczekuje na Android Auto."
-                    else "Automatyzacja włączona; monitorowanie GPS uruchamiane."
+                    _userMessage.value = "Automatyzacja włączona."
                 }
             } else {
                 AutoCallForegroundService.stopService(context)
@@ -110,17 +106,8 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
                 AutoCallForegroundService.startService(context)
             }
             _userMessage.value = if (required)
-                "Android Auto wymagane; GPS włączy się tylko przy projekcji."
-            else "Tryb bez auta – GPS aktywny podczas automatyzacji."
-        }
-    }
-
-    fun toggleWaitForGpsFix(enabled: Boolean) {
-        viewModelScope.launch {
-            prefs.setWaitForGpsFixEnabled(enabled)
-            _userMessage.value = if (enabled)
-                "Po połączeniu Android Auto czekam na nowy satelitarny fix GPS."
-            else "Android Auto: dopuszczona pozycja sieciowa. Rower nadal wymaga GPS."
+                "GPS włączy się przy połączeniu z Android Auto."
+            else "Android Auto nie jest wymagane."
         }
     }
 
@@ -130,7 +117,7 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
             return
         }
         RadarBleManager.startDiscovery(context)
-        _userMessage.value = "Skanowanie BLE przez 30 sekund. Włącz radar Magene L508."
+        _userMessage.value = "Skanowanie BLE przez 30 sekund. Włącz urządzenie, które chcesz wybrać."
     }
 
     fun selectRadar(device: NearbyBleDevice) {
@@ -139,7 +126,7 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
             // End discovery at once so the filtered monitoring scan starts and the
             // status line shows straight away whether the selected device is heard.
             RadarBleManager.stopDiscovery()
-            _userMessage.value = "Wybrano ${device.name}. Status poniżej pokazuje, czy nasłuch go odbiera."
+            _userMessage.value = "Wybrano ${device.name}. Status poniżej pokazuje, czy nasłuch je odbiera."
         }
     }
 
@@ -147,13 +134,13 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
         viewModelScope.launch {
             val previous = prefs.radarConfigFlow.first()
             if (enabled && previous.address.isBlank()) {
-                _userMessage.value = "Najpierw wyszukaj i wybierz radar."
+                _userMessage.value = "Najpierw wyszukaj i wybierz urządzenie BT."
                 return@launch
             }
             prefs.setRadarConfig(enabled, previous.address, previous.name, previous.signature)
             _userMessage.value = if (enabled)
-                "Wykrycie radaru może aktywować GPS także bez Android Auto."
-            else "Wykrywanie radaru wyłączone."
+                "GPS włączy się po wykryciu wybranego urządzenia BT."
+            else "Urządzenie BT nie jest wymagane."
         }
     }
 
