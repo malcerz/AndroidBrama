@@ -23,7 +23,6 @@ class SettingsBackupTest {
         assertEquals(3, restored.slots.size)
         assertTrue(restored.automationEnabled)
         assertTrue(restored.requireAndroidAuto)
-        assertTrue(restored.waitForGpsFix)
         assertEquals("+48111222333", restored.slots.first().phoneNumber)
         assertEquals(80f, restored.slots.first().radiusMeters, 0.01f)
         assertEquals(42f, restored.slots.first().hysteresisMeters, 0.01f)
@@ -33,16 +32,23 @@ class SettingsBackupTest {
         assertEquals("19813-5", restored.radarConfig.name)
     }
 
-    @Test fun gpsCheckboxRoundTripCanBeDisabled() {
-        val restored = SettingsBackup.parse(sample().copy(waitForGpsFix = false).toJson())
-        assertFalse(restored.waitForGpsFix)
+    @Test fun gateGraceRoundTripAndDefault() {
+        val withGrace = sample().copy(
+            slots = sample().slots.map { if (it.id == 2) it.copy(graceMinutes = 3) else it }
+        )
+        val restored = SettingsBackup.parse(withGrace.toJson())
+        assertEquals(10, restored.slots[0].graceMinutes)
+        assertEquals(3, restored.slots[1].graceMinutes)
+        val old = JSONObject(sample().toJson())
+        val slots = old.getJSONArray("slots")
+        for (i in 0 until slots.length()) slots.getJSONObject(i).remove("graceMinutes")
+        assertEquals(10, SettingsBackup.parse(old.toString()).slots[1].graceMinutes)
     }
 
-    @Test fun v2BackupWithoutGpsFlagDefaultsToSafeTrue() {
+    @Test fun oldBackupWithGpsFlagStillImports() {
         val old = JSONObject(sample().toJson())
-        old.put("version", 2)
-        old.remove("waitForGpsFix")
-        assertTrue(SettingsBackup.parse(old.toString()).waitForGpsFix)
+        old.put("waitForGpsFix", false)
+        assertEquals(3, SettingsBackup.parse(old.toString()).slots.size)
     }
 
     @Test

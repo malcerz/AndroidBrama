@@ -77,22 +77,29 @@ com.autobrama.app
 
 ---
 
-## 🚴 Wykrywanie radaru Magene L508 przez Bluetooth LE
+## 📶 Urządzenie Bluetooth LE jako warunek aktywacji
 
-1. Włącz radar L508 i Bluetooth w telefonie.
-2. W AutoBrama wybierz **Wyszukaj urządzenia BLE (30 s)**, przyznaj uprawnienie **Urządzenia w pobliżu** i znajdź reklamowany radar (np. `19813-5`).
-3. Dotknij konkretnego urządzenia z listy; zapisywany jest adres BLE i nazwa. Radar jest rozpoznawany po adresie, a gdy pojawi się pod innym (losowym) adresem – po rozgłaszanej nazwie.
-4. Włącz automatyzację. Jeśli **Wymagaj Android Auto** pozostaje aktywne, GPS może uruchomić zarówno połączenie Android Auto, jak i wykrycie wybranego radaru. Jeśli to wymaganie wyłączysz, GPS działa bezwarunkowo po aktywowaniu automatyzacji, tak jak dotychczas.
+Wskazać można **dowolne urządzenie BLE** (np. lokalizator przy rowerze, radar, opaskę) – aplikacja nie jest związana z żadnym modelem.
 
-Aplikacja pasywnie skanuje reklamy BLE i **nie łączy się z radarem**, nie pobiera baterii i nie zakłóca połączenia ANT+ z Edge. Obecność potwierdzają dwa sygnały reklamowe odebrane w odstępie co najmniej 2 sekund (w ciągu 20 sekund); potwierdzony sygnał jest ważny przez maksymalnie 40 sekund od ostatniej reklamy, bo energooszczędny skan nasłuchuje tylko przez ułamek czasu i pojedyncze pominięte okna nie mogą wyłączać GPS w trakcie jazdy. Wyszukiwanie urządzeń (30 s) działa w trybie szybkim. Skan jest wznawiany automatycznie po wyłączeniu i włączeniu Bluetooth oraz odświeżany co 25 minut; przy wyłączonej lokalizacji systemowej status BLE informuje, że skan nie działa. Dla roweru dopiero **nowy fix z GPS_PROVIDER otrzymany po wykryciu radaru** i odległość mieszcząca się w promieniu aktywacji umożliwiają połączenie. Lokalizacja oparta wyłącznie na Wi-Fi lub BTS nie wystarcza. Brak satelitów w garażu/piwnicy oznacza brak połączenia. Sygnał BLE oznacza **obecność w pobliżu**, a nie potwierdzoną jazdę. Urządzenia mogą nie nadawać ciągłych reklam lub zmieniać swój prywatny adres BLE; w takim przypadku wykrywanie może wymagać ponownego wybrania radaru. Android może ograniczać skanowanie w tle. Używaj statusu BLE na ekranie do diagnozy.
+1. Włącz wybrane urządzenie i Bluetooth w telefonie.
+2. W AutoBrama wybierz **Wyszukaj urządzenia BLE (30 s)**, przyznaj uprawnienie **Urządzenia w pobliżu** i dotknij urządzenia na liście; zapisywany jest adres BLE i nazwa. Urządzenie jest rozpoznawane po adresie, a gdy pojawi się pod innym (losowym) adresem – po rozgłaszanej nazwie.
+3. Włącz **Wymagaj urządzenia BT** i automatyzację.
 
-Dla Android Auto dodano checkbox **Czekaj na GPS** (domyślnie włączony): po rozpoczęciu projekcji aplikacja oczekuje nowego satelitarnego fixu GPS, a dopiero potem sprawdza odległość i ewentualnie dzwoni. Wyłączenie checkboxa przywraca dotychczasowe użycie Fused Location dla auta; rower nadal wymaga satelitarnego GPS. Android 12+ wymaga uprawnienia **Urządzenia w pobliżu** (do skanowania wystarcza BLUETOOTH_SCAN; BLUETOOTH_CONNECT służy tylko do odczytu nazwy), a aplikacja nadal wymaga dokładnej lokalizacji dla geofencingu. **Test na fizycznym L508 jest konieczny**, zwłaszcza przy wyłączonym ekranie.
+**Wymagaj Android Auto** i **Wymagaj urządzenia BT** to dwa niezależne przełączniki; każdy włączony warunek uruchamia GPS sam z siebie (wystarczy jeden z nich). Gdy oba są wyłączone, GPS działa cały czas po włączeniu automatyzacji (tryb testowy).
+
+Aplikacja pasywnie skanuje reklamy BLE i **nie łączy się z urządzeniem**. Obecność potwierdzają dwa sygnały reklamowe odebrane w odstępie co najmniej 2 sekund (w ciągu 20 sekund); potwierdzony sygnał jest ważny przez maksymalnie 40 sekund od ostatniej reklamy. Wyszukiwanie urządzeń (30 s) działa w trybie szybkim. Skan jest wznawiany po wyłączeniu i włączeniu Bluetooth oraz odświeżany co 25 minut; przy wyłączonej lokalizacji systemowej status BLE informuje, że skan nie działa. Nasłuch działa tylko przy włączonej automatyzacji. Sygnał BLE oznacza **obecność w pobliżu**, a nie potwierdzoną jazdę. Część urządzeń (np. lokalizatory typu Find My) często zmienia swój prywatny adres BLE – wtedy rozpoznanie opiera się na nazwie. Android może ograniczać skanowanie w tle. Android 12+ wymaga uprawnienia **Urządzenia w pobliżu** (do skanowania wystarcza BLUETOOTH_SCAN) oraz dokładnej lokalizacji.
+
+### Karencja (osobno dla każdej bramy)
+
+W ustawieniach bramy, obok promienia i histerezy, ustawia się **karencję po wykryciu urządzenia BT** (domyślnie 10 min, 0 = brak). Przez ten czas od wykrycia urządzenia brama nie otwiera się: jeśli w tym czasie jesteś w jej strefie (np. urządzenie włączone w garażu), brama jest oznaczana jako obsłużona i uzbraja się dopiero po odjechaniu na `promień + histereza`. Krótka utrata sygnału w trasie nie zaczyna karencji od nowa; nowa sesja zaczyna się po ponad 10 minutach bez sygnału. Przy połączeniu z Android Auto karencji nie ma. Pozycja pochodzi z Fused Location (bez oczekiwania na fix satelitarny).
+
+Lista wykrytych urządzeń zachowuje kolejność wykrycia (nowe są dopisywane na końcu), urządzenia bez nazwy są domyślnie ukryte. Status pokazuje, kiedy wybrane urządzenie było ostatnio słyszane.
 
 ## 💾 Eksport i import ustawień
 
 W głównym ekranie wybierz **Eksport JSON**, aby zapisać plik `AndroidBrama-ustawienia.json` przez systemowy wybór dokumentu Android. **Import JSON** pozwala wybrać taki plik, sprawdza jego strukturę i zawartość, a przed zastąpieniem konfiguracji wymaga potwierdzenia.
 
-W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, histerezy poszczególnych bram, aktywność poszczególnych bram, a także ustawienie automatyzacji, wymóg Android Auto, opcja Czekaj na GPS oraz wybrany radar BLE (adres, nazwa, włączenie). Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Starsze pliki JSON bez pola histerezy są nadal obsługiwane i otrzymują domyślne 150 m. Pliki v1/v2 bez pola Czekaj na GPS są importowane z bezpiecznym ustawieniem włączonym. Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
+W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, histerezy poszczególnych bram, karencje poszczególnych bram, a także ustawienie automatyzacji, wymóg Android Auto oraz wybrane urządzenie BLE (adres, nazwa, wymóg). Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Starsze pliki JSON bez pola histerezy są nadal obsługiwane i otrzymują domyślne 150 m. Pliki bez pola karencji otrzymują domyślne 10 min; pole Czekaj na GPS ze starszych plików jest ignorowane. Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
 
 ## ⚠️ Android 11+ i ograniczenia systemowe
 
@@ -161,9 +168,3 @@ Aplikacja deklaruje w `AndroidManifest.xml` następujące uprawnienia:
 ## 📄 Licencja
 
 Projekt udostępniony na licencji MIT (lub dowolnej wybranej przez autora).
-
-### Radar rowerowy (BLE) — karencja zamiast fixu GPS
-
-Na rowerze telefon zwykle jest w kieszeni, więc tryb radaru nie wymaga satelitarnego fixu GPS (używana jest lokalizacja fused). Zamiast tego przez **10 minut od wykrycia radaru** aplikacja nie otwiera bramy: jeśli w tym czasie jesteś w strefie (np. radar włączony w garażu), brama jest oznaczana jako obsłużona i uzbraja się dopiero po odjechaniu na `promień + histereza`. Krótka utrata sygnału radaru w trasie nie restartuje karencji; nowa karencja zaczyna się dopiero po ponad 10 minutach bez sygnału. Checkbox **Czekaj na GPS** dotyczy wyłącznie Android Auto.
-
-Lista wykrytych urządzeń BLE zachowuje kolejność wykrycia (nowe dopisywane na końcu), prawdopodobne radary są na górze, urządzenia bez nazwy są domyślnie ukryte. Status pokazuje, kiedy wybrane urządzenie było ostatnio słyszane.

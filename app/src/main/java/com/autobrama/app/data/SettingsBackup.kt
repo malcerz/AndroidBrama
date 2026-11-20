@@ -12,15 +12,13 @@ data class SettingsBackup(
     val automationEnabled: Boolean,
     val requireAndroidAuto: Boolean,
     val slots: List<GateLocationSlot>,
-    val radarConfig: RadarConfig = RadarConfig(false, "", ""),
-    val waitForGpsFix: Boolean = true
+    val radarConfig: RadarConfig = RadarConfig(false, "", "")
 ) {
     fun toJson(): String = JSONObject().apply {
         put("format", FORMAT)
         put("version", VERSION)
         put("automationEnabled", automationEnabled)
         put("requireAndroidAuto", requireAndroidAuto)
-        put("waitForGpsFix", waitForGpsFix)
         put("radarEnabled", radarConfig.enabled)
         put("radarAddress", radarConfig.address)
         put("radarName", radarConfig.name)
@@ -63,7 +61,10 @@ data class SettingsBackup(
                         radiusMeters = item.getDouble("radiusMeters").toFloat(),
                         // Older v1 backups have no hysteresis field.
                         hysteresisMeters = if (item.has("hysteresisMeters"))
-                            item.getDouble("hysteresisMeters").toFloat() else 150f
+                            item.getDouble("hysteresisMeters").toFloat() else 150f,
+                        // Backups from before v1.3 have no per-gate grace period.
+                        graceMinutes = if (item.has("graceMinutes"))
+                            item.getInt("graceMinutes") else GateLocationSlot.DEFAULT_GRACE_MINUTES
                     )
                     require(slot.id in 1..3) { "Nieprawidłowy identyfikator bramy." }
                     require(slot.name.isNotBlank() && slot.name.length <= 100) { "Nieprawidłowa nazwa bramy." }
@@ -76,6 +77,9 @@ data class SettingsBackup(
                     }
                     require(slot.hysteresisMeters.isFinite() && slot.hysteresisMeters in 0f..2000f) {
                         "Histereza musi wynosić 0–2000 m."
+                    }
+                    require(slot.graceMinutes in 0..GateLocationSlot.MAX_GRACE_MINUTES) {
+                        "Karencja musi wynosić 0–${GateLocationSlot.MAX_GRACE_MINUTES} min."
                     }
                     require(slot.phoneNumber.isEmpty() ||
                             slot.phoneNumber.matches(Regex("^\\+?[0-9*# ()-]{1,30}$"))) {
@@ -92,18 +96,16 @@ data class SettingsBackup(
                 val radarSignature = root.optString("radarSignature", "").take(400)
                 require(radarAddress.isEmpty() ||
                     radarAddress.matches(Regex("([0-9A-F]{2}:){5}[0-9A-F]{2}"))) {
-                    "Nieprawidłowy adres radaru BLE."
+                    "Nieprawidłowy adres urządzenia BLE."
                 }
                 require(!radarEnabled || radarAddress.isNotBlank()) {
-                    "Tryb radaru wymaga wskazania urządzenia."
+                    "Wymaganie urządzenia BT wymaga wskazania urządzenia."
                 }
                 return SettingsBackup(
                     automationEnabled = root.getBoolean("automationEnabled"),
                     requireAndroidAuto = root.getBoolean("requireAndroidAuto"),
                     slots = slots.sortedBy { it.id },
-                    radarConfig = RadarConfig(radarEnabled, radarAddress, radarName, radarSignature),
-                    // v1/v2 backups had no switch; choose the safe default.
-                    waitForGpsFix = if (root.has("waitForGpsFix")) root.getBoolean("waitForGpsFix") else true
+                    radarConfig = RadarConfig(radarEnabled, radarAddress, radarName, radarSignature)
                 )
             } catch (e: JSONException) {
                 throw IllegalArgumentException("Uszkodzony lub nieprawidłowy plik JSON.", e)
