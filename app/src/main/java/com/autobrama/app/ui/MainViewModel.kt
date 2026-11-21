@@ -15,6 +15,8 @@ import android.net.Uri
 import androidx.car.app.connection.CarConnection
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.autobrama.app.connection.CarConnectionManager
 import com.autobrama.app.connection.RadarBleManager
@@ -36,6 +38,7 @@ import kotlinx.coroutines.launch
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs = PreferencesManager(application)
+    private var recoveryInProgress = false
 
     val isAutomationEnabled: StateFlow<Boolean> = prefs.isAutomationEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
@@ -79,6 +82,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _userMessage.value = null
     }
 
+    /**
+     * Reconcile the persisted automation switch with the real service state.
+     * Called only from visible UI / permission result, never from Application
+     * startup or a background worker (Android 12+ forbids many FGS starts there).
+     */
+    fun recoverMonitoringFromVisibleUi(context: Context) {
+        if (recoveryInProgress || isServiceRunning.value) return
+        recoveryInProgress = true
+        viewModelScope.launch {
+            try {
+                val enabled = prefs.isAutomationEnabled()
+                if (!enabled || isServiceRunning.value) return@launch
+                val stillVisible = (context as? LifecycleOwner)
+                    ?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) ?: false
+                if (!stillVisible) return@launch
+                if (!AutoCallForegroundService.startService(context)) {
+                    _userMessage.value =
+                        "Automatyzacja jest włączona, ale serwis nie wystartował. " +
+                        "Sprawdź uprawnienia do dokładnej lokalizacji."
+                }
+            } catch (e: Exception) {
+                _userMessage.value =
+                    "Nie udało się wznowić monitorowania: ${e.message ?: "błąd systemu"}"
+            } finally {
+                recoveryInProgress = false
+            }
+        }
+    }
+
 fun toggleAutomation(enabled: Boolean, context: Context) {
         viewModelScope.launch {
             prefs.setAutomationEnabled(enabled)
@@ -120,9 +152,10 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
         _userMessage.value = "Skanowanie BLE przez 30 sekund. Włącz urządzenie, które chcesz wybrać."
     }
 
-    fun selectRadar(device: NearbyBleDevice) {
+    fun selectRadar(device: NearbyBleDevice, context: Context) {
         viewModelScope.launch {
             prefs.setRadarConfig(true, device.address, device.name, device.signature)
+            recoverMonitoringFromVisibleUi(context)
             // End discovery at once so the filtered monitoring scan starts and the
             // status line shows straight away whether the selected device is heard.
             RadarBleManager.stopDiscovery()
@@ -130,7 +163,7 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
         }
     }
 
-    fun toggleRadarEnabled(enabled: Boolean) {
+    fun toggleRadarEnabled(enabled: Boolean, context: Context) {
         viewModelScope.launch {
             val previous = prefs.radarConfigFlow.first()
             if (enabled && previous.address.isBlank()) {
@@ -138,6 +171,9 @@ fun toggleRequireAndroidAuto(required: Boolean, context: Context) {
                 return@launch
             }
             prefs.setRadarConfig(enabled, previous.address, previous.name, previous.signature)
+            // The BT switch must not leave a persisted-on automation with a dead
+            // standby service. Start it from the currently visible activity.
+            if (enabled) recoverMonitoringFromVisibleUi(context)
             _userMessage.value = if (enabled)
                 "GPS włączy się po wykryciu wybranego urządzenia BT."
             else "Urządzenie BT nie jest wymagane."

@@ -71,6 +71,13 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        // A persisted "on" switch does not imply that Android kept the
+        // foreground service alive after an app upgrade or process restart.
+        viewModel.recoverMonitoringFromVisibleUi(this)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -119,6 +126,14 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
         val allGranted = results.values.all { it }
         if (!allGranted) {
             Toast.makeText(context, "Wymagane uprawnienia nie zostały w pełni przyznane", Toast.LENGTH_SHORT).show()
+        }
+        // Permission dialogs need not cause another Activity.onResume callback.
+        // Retry once from the visible UI after fine location is granted.
+        if (ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            viewModel.recoverMonitoringFromVisibleUi(context)
         }
     }
 
@@ -277,10 +292,12 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = if (isAutomationEnabled)
-                                    "Aktywna"
+                                text = if (!isAutomationEnabled)
+                                    "Wyłączona – oszczędzanie baterii"
+                                else if (!isServiceRunning)
+                                    "Włączona w ustawieniach, ale serwis ZATRZYMANY"
                                 else
-                                    "Wyłączona – oszczędzanie baterii",
+                                    "Aktywna – serwis działa",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.DarkGray
                             )
@@ -350,7 +367,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             checked = radarConfig.enabled,
                             enabled = radarConfig.address.isNotBlank(),
                             onCheckedChange = { checked ->
-                                viewModel.toggleRadarEnabled(checked)
+                                viewModel.toggleRadarEnabled(checked, context)
                             }
                         )
                     }
@@ -415,7 +432,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         RadarDeviceList(
                             devices = radarDevices,
                             selectedAddress = radarConfig.address,
-                            onSelect = { viewModel.selectRadar(it) }
+                            onSelect = { viewModel.selectRadar(it, context) }
                         )
                     }
                     Text(
