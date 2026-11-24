@@ -97,6 +97,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
     val isGpsActive by viewModel.isGpsActive.collectAsState()
+    val isRearmMonitoring by viewModel.isRearmMonitoring.collectAsState()
     val serviceStatusMessage by viewModel.serviceStatusMessage.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
     val closestGateStatus by viewModel.closestGateStatus.collectAsState()
@@ -499,8 +500,13 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     ) {
                         Text("Foreground Service:", style = MaterialTheme.typography.bodyMedium)
                         BadgeBox(
-                            text = if (isGpsActive) "GPS AKTYWNY" else if (isServiceRunning) "CZUWA (GPS OFF)" else "ZATRZYMANY",
-                            backgroundColor = if (isGpsActive) Color(0xFF2196F3) else if (isServiceRunning) Color(0xFF00897B) else Color(0xFF9E9E9E)
+                            text = when {
+                                isGpsActive -> "GPS AKTYWNY"
+                                isRearmMonitoring -> "SPRAWDZAM WYJAZD"
+                                isServiceRunning -> "CZUWA (GPS OFF)"
+                                else -> "ZATRZYMANY"
+                            },
+                            backgroundColor = if (isGpsActive) Color(0xFF2196F3) else if (isRearmMonitoring) Color(0xFFE65100) else if (isServiceRunning) Color(0xFF00897B) else Color(0xFF9E9E9E)
                         )
                     }
 
@@ -537,7 +543,8 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                             Text("Stan strefy (${c.slot.name}):", style = MaterialTheme.typography.bodyMedium)
                             val stateLabel = when (c.zoneState) {
                                 GateZoneState.OUTSIDE_ZONE -> "Czuwanie (poza strefą)"
-                                GateZoneState.IN_ZONE_TRIGGERED -> "Wyzwolenie obsłużone (blokada)"
+                                GateZoneState.IN_ZONE_TRIGGERED ->
+                                    "Blokada do wyjazdu poza ${(c.slot.radiusMeters + c.slot.hysteresisMeters).toInt()} m"
                                 GateZoneState.HYSTERESIS_COOLDOWN -> "Histereza (+${c.slot.hysteresisMeters.toInt()} m blokada)"
                             }
                             Text(
