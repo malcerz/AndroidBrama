@@ -129,13 +129,14 @@ class PreferencesManager(private val context: Context) {
     }
 
     /** Gate IDs whose call has been initiated; survive app/service restarts. */
-    suspend fun getLatchedGateIds(): Set<Int> =
-        context.dataStore.data.map { preferences ->
-            (preferences[KEY_LATCHED_GATES] ?: emptySet())
-                .mapNotNull { it.toIntOrNull() }
-                .filter { it in 1..3 }
-                .toSet()
-        }.first()
+    val latchedGateIdsFlow: Flow<Set<Int>> = context.dataStore.data.map { preferences ->
+        (preferences[KEY_LATCHED_GATES] ?: emptySet())
+            .mapNotNull { it.toIntOrNull() }
+            .filter { it in 1..3 }
+            .toSet()
+    }
+
+    suspend fun getLatchedGateIds(): Set<Int> = latchedGateIdsFlow.first()
 
     suspend fun setLatchedGateIds(ids: Set<Int>) {
         require(ids.all { it in 1..3 }) { "Invalid gate ID" }

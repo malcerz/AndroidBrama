@@ -75,6 +75,8 @@ class AutoCallForegroundService : Service() {
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
         private val _isGpsActive = MutableStateFlow(false)
         val isGpsActive: StateFlow<Boolean> = _isGpsActive.asStateFlow()
+        private val _isRearmMonitoring = MutableStateFlow(false)
+        val isRearmMonitoring: StateFlow<Boolean> = _isRearmMonitoring.asStateFlow()
         private val _closestGateStatus = MutableStateFlow<ActiveGateStatus?>(null)
         val closestGateStatus: StateFlow<ActiveGateStatus?> = _closestGateStatus.asStateFlow()
         private val _gateStatuses = MutableStateFlow<Map<Int, ActiveGateStatus>>(emptyMap())
@@ -116,6 +118,12 @@ class AutoCallForegroundService : Service() {
     private lateinit var locationCallback: LocationCallback
     private var locationListening = false
     private var trackingDecision = TrackingDecision(false)
+    // Only listens while a previously triggered gate remains latched AND neither
+    // Android Auto nor the selected Bluetooth device permits normal tracking.
+    // It can clear a latch after a verified departure but can never dial.
+    private var rearmListening = false
+    private var rearmCallback: LocationCallback? = null
+    private val departureEvidence = DepartureEvidence()
     private val radarGrace = RadarGrace()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val stateMachines = mutableMapOf<Int, GateTriggerStateMachine>()
@@ -156,11 +164,16 @@ class AutoCallForegroundService : Service() {
             ) { enabled, requireAA, carType, slots, radarConfig ->
                 MonitorConfig(enabled, requireAA, carType, slots, radarConfig)
             }
-            combine(options, RadarBleManager.present) { config, present ->
-                config.copy(radarPresent = present)
+            combine(
+                options,
+                RadarBleManager.present,
+                preferencesManager.latchedGateIdsFlow
+            ) { config, present, latched ->
+                config.copy(radarPresent = present, latchedGateIds = latched)
             }.collect { config ->
                 if (!config.enabled) {
                     trackingDecision = TrackingDecision(false)
+                    stopRearmOnly()
                     RadarBleManager.setMonitoring(applicationContext, false, "", "")
                     stopLocationUpdates()
                     stopSelf()
@@ -193,21 +206,36 @@ class AutoCallForegroundService : Service() {
                 when {
                     !activeSlots -> {
                         stopLocationUpdates()
+                        stopRearmOnly()
                         updateNotification("Brak skonfigurowanych aktywnych bram")
                     }
                     !trackingDecision.allowed -> {
                         stopLocationUpdates()
+                        // Without this, a persistent gate latch can remain stuck
+                        // forever if GPS sleeps during the departure from a gate.
+                        val needsRearm = config.slots.any {
+                            it.enabled && it.phoneNumber.isNotBlank() &&
+                                it.id in config.latchedGateIds
+                        }
+                        if (needsRearm) startRearmOnly() else stopRearmOnly()
                         updateNotification(
-                            if (config.requireAA && selected.enabled && selected.address.isNotBlank())
+                            if (rearmListening) {
+                                "Czuwam: sprawdzam oddalenie od bramy (bez dzwonienia)"
+                            } else if (config.requireAA && selected.enabled && selected.address.isNotBlank()) {
                                 "Czekam na Android Auto lub urządzenie BT (${selected.name})"
-                            else if (selected.enabled && selected.address.isNotBlank())
+                            } else if (selected.enabled && selected.address.isNotBlank()) {
                                 "Czekam na urządzenie BT (${selected.name})"
-                            else if (config.carType == CarConnectionManager.UNKNOWN)
+                            } else if (config.carType == CarConnectionManager.UNKNOWN) {
                                 "Ustalanie stanu Android Auto – GPS wyłączony"
-                            else "Czekam na Android Auto – GPS wyłączony"
+                            } else {
+                                "Czekam na Android Auto – GPS wyłączony"
+                            }
                         )
                     }
-                    else -> startLocationUpdates()
+                    else -> {
+                        stopRearmOnly()
+                        startLocationUpdates()
+                    }
                 }
             }
         }
@@ -219,7 +247,8 @@ class AutoCallForegroundService : Service() {
         val carType: Int,
         val slots: List<GateLocationSlot>,
         val radarConfig: RadarConfig,
-        val radarPresent: Boolean = false
+        val radarPresent: Boolean = false,
+        val latchedGateIds: Set<Int> = emptySet()
     )
 
     private fun startAsForeground(contentText: String) {
@@ -258,6 +287,112 @@ class AutoCallForegroundService : Service() {
             manager.notify(AutoBramaApplication.NOTIFICATION_ID, buildNotification(text))
         } catch (e: Exception) {
             Log.w(TAG, "Nie można uaktualnić powiadomienia", e)
+        }
+    }
+
+    /**
+     * Low-duty-cycle positioning exists solely to observe departure from an
+     * already blocked gate. It never invokes onNewLocation / placeGateCall.
+     * Stop once all active latches are rearmed, or when normal tracking starts.
+     */
+    private fun startRearmOnly() {
+        if (rearmListening) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            updateNotification("Brak dokładnej lokalizacji – nie mogę uzbroić bramy")
+            return
+        }
+        try {
+            val request = LocationRequest.Builder(
+                Priority.PRIORITY_BALANCED_POWER_ACCURACY, 120_000L
+            )
+                .setMinUpdateIntervalMillis(60_000L)
+                .setWaitForAccurateLocation(false)
+                .build()
+            val callback = object : LocationCallback() {
+                override fun onLocationResult(result: LocationResult) {
+                    // A batch may contain old positions; the timestamp is checked
+                    // in onRearmOnlyLocation before any persisted state is changed.
+                    result.locations.forEach { onRearmOnlyLocation(it) }
+                }
+            }
+            rearmCallback = callback
+            rearmListening = true
+            _isRearmMonitoring.value = true
+            fusedLocationClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
+                .addOnFailureListener { error ->
+                    Log.e(TAG, "Tryb uzbrajania: nie można uzyskać lokalizacji", error)
+                    stopRearmOnly()
+                    updateNotification("Nie mogę sprawdzić wyjazdu – sprawdź dostęp do lokalizacji")
+                }
+        } catch (e: Exception) {
+            Log.e(TAG, "Nie można uruchomić niskoenergetycznej obserwacji wyjazdu", e)
+            stopRearmOnly()
+            updateNotification("Nie można sprawdzić oddalenia od bramy")
+        }
+    }
+
+    private fun stopRearmOnly() {
+        if (rearmListening) {
+            rearmCallback?.let { callback ->
+                try { fusedLocationClient.removeLocationUpdates(callback) }
+                catch (e: Exception) { Log.w(TAG, "Nie można zatrzymać obserwacji wyjazdu", e) }
+            }
+        }
+        rearmCallback = null
+        rearmListening = false
+        _isRearmMonitoring.value = false
+        departureEvidence.reset()
+    }
+
+    private fun onRearmOnlyLocation(location: Location) {
+        serviceScope.launch {
+            locationMutex.withLock {
+                // A passive observation may ONLY clear an old latch. It can
+                // never run the gate trigger state machine or dial the phone.
+                if (!rearmListening || trackingDecision.allowed ||
+                    !location.hasAccuracy()
+                ) return@withLock
+                val age = SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
+                if (age < 0L || age > MAX_FIX_AGE_NANOS) return@withLock
+
+                val oldLatches = preferencesManager.getLatchedGateIds()
+                if (oldLatches.isEmpty()) return@withLock
+                val slots = preferencesManager.getSlots()
+                val updatedLatches = oldLatches.toMutableSet()
+                val now = SystemClock.elapsedRealtime()
+                val rearmedNames = mutableListOf<String>()
+                for (slot in slots) {
+                    if (slot.id !in oldLatches || !slot.enabled ||
+                        slot.phoneNumber.isBlank()
+                    ) continue
+                    val distance = FloatArray(1)
+                    Location.distanceBetween(
+                        location.latitude, location.longitude,
+                        slot.latitude, slot.longitude, distance
+                    )
+                    if (departureEvidence.observe(
+                            slot.id,
+                            distance[0],
+                            location.accuracy,
+                            slot.radiusMeters + slot.hysteresisMeters,
+                            now
+                        )
+                    ) {
+                        updatedLatches.remove(slot.id)
+                        // Keep the in-memory state machine consistent with the
+                        // persisted latch removed by this confirmed departure.
+                        stateMachines[slot.id]?.resetSession()
+                        rearmedNames.add(slot.name)
+                    }
+                }
+                if (updatedLatches != oldLatches) {
+                    preferencesManager.setLatchedGateIds(updatedLatches)
+                    Log.i(TAG, "Potwierdzono wyjazd: ponownie uzbrojone bramy: ${rearmedNames.joinToString()}")
+                    updateNotification("Ponownie uzbrojono: ${rearmedNames.joinToString()}")
+                }
+            }
         }
     }
 
@@ -495,6 +630,7 @@ class AutoCallForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        stopRearmOnly()
         RadarBleManager.setMonitoring(applicationContext, false, "", "")
         stopLocationUpdates()
         stateMachines.clear()
