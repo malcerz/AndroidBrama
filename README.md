@@ -93,6 +93,10 @@ Aplikacja pasywnie skanuje reklamy BLE i **nie łączy się z urządzeniem**. Ob
 
 W ustawieniach bramy, obok promienia i histerezy, ustawia się **karencję po wykryciu urządzenia BT** (domyślnie 10 min, 0 = brak). Przez ten czas od wykrycia urządzenia brama nie otwiera się: jeśli w tym czasie jesteś w jej strefie (np. urządzenie włączone w garażu), brama jest oznaczana jako obsłużona i uzbraja się dopiero po odjechaniu na `promień + histereza`. Krótka utrata sygnału w trasie nie zaczyna karencji od nowa; nowa sesja zaczyna się po ponad 10 minutach bez sygnału. Przy połączeniu z Android Auto karencji nie ma. Pozycja pochodzi z Fused Location (bez oczekiwania na fix satelitarny).
 
+### Ponowne uzbrajanie po utracie BT/Android Auto (od 1.3.2)
+
+Jeśli brama została wcześniej obsłużona, jej blokada jest zapisywana na dysku. Po zniknięciu urządzenia BT/Android Auto aplikacja **nie dzwoni**, ale na czas istnienia aktywnej blokady co około 2 minuty pobiera energooszczędne położenie, aby wykryć wyjazd. Po **dwóch świeżych pomiarach** co najmniej 15 s od siebie, kiedy nawet po uwzględnieniu dokładności telefon jest poza progiem `promień + histereza + 20 m`, zapis blokady jest usuwany. Po zwolnieniu ostatniej blokady dodatkowe monitorowanie ustaje. Przy wykryciu BT lub Android Auto uruchamia się dotychczasowe normalne monitorowanie i nadal obowiązują wszystkie zasady karencji, odległości i dzwonienia. **Tryb obserwowania wyjazdu nigdy nie może wywołać połączenia.** Gdy system nie dostarcza nowych lokalizacji (lub ubije Foreground Service), uzbrojenie nie jest gwarantowane.
+
 Lista wykrytych urządzeń zachowuje kolejność wykrycia (nowe są dopisywane na końcu), urządzenia bez nazwy są domyślnie ukryte. Status pokazuje, kiedy wybrane urządzenie było ostatnio słyszane.
 
 ## 💾 Eksport i import ustawień
