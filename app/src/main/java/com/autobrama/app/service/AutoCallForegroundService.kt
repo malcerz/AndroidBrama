@@ -305,9 +305,9 @@ class AutoCallForegroundService : Service() {
         }
         try {
             val request = LocationRequest.Builder(
-                Priority.PRIORITY_BALANCED_POWER_ACCURACY, 60_000L
+                Priority.PRIORITY_BALANCED_POWER_ACCURACY, 120_000L
             )
-                .setMinUpdateIntervalMillis(30_000L)
+                .setMinUpdateIntervalMillis(60_000L)
                 .setWaitForAccurateLocation(false)
                 .build()
             val callback = object : LocationCallback() {
