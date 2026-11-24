@@ -62,6 +62,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val isServiceRunning: StateFlow<Boolean> = AutoCallForegroundService.isRunning
     val isGpsActive: StateFlow<Boolean> = AutoCallForegroundService.isGpsActive
+    val isRearmMonitoring: StateFlow<Boolean> = AutoCallForegroundService.isRearmMonitoring
     val closestGateStatus: StateFlow<ActiveGateStatus?> = AutoCallForegroundService.closestGateStatus
     val gateStatuses: StateFlow<Map<Int, ActiveGateStatus>> = AutoCallForegroundService.gateStatuses
     val serviceStatusMessage: StateFlow<String> = AutoCallForegroundService.statusMessage
