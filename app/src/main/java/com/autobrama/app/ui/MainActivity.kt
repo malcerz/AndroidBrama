@@ -376,8 +376,8 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
                     if (!requireAndroidAuto && !radarConfig.enabled) {
                         Text(
-                            text = "Oba warunki wyłączone – GPS jest aktywny cały czas " +
-                                "(tryb testowy).",
+                            text = "Oba warunki wyłączone – nasłuch GPS działa w trybie testowym. " +
+                                "Do automatycznego dzwonienia nadal potrzebny jest fix satelitarny.",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFFC62828)
                         )
@@ -438,13 +438,12 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         )
                     }
                     Text(
-                        "Wykrycie wymaga dwóch sygnałów BLE; aplikacja tylko nasłuchuje " +
-                        "(bez parowania i połączenia). Po wykryciu urządzenia każda brama ma " +
-                        "własną karencję (ustawienia bramy): w tym czasie nie otworzy się, " +
-                        "a otworzy dopiero po odjechaniu i ponownym wjeździe w strefę. " +
-                        "Krótka utrata sygnału w trasie nie zaczyna karencji od nowa. " +
-                        "Przy Android Auto karencji nie ma. Urządzenie jest rozpoznawane " +
-                        "po adresie BLE lub nazwie.",
+                        "Wykrycie urządzenia wymaga dwóch reklam BLE (bez parowania). " +
+                        "Po wykryciu urządzenia lub podłączeniu Android Auto brama " +
+                        "może otworzyć się wyłącznie przy świeżym fixie satelitarnym GPS, " +
+                        "w ustawionym promieniu. Brak fixu = brak automatycznego połączenia. " +
+                        "Nie ma już karencji czasowej BT. Histereza nadal blokuje ponowne " +
+                        "otwarcie do czasu oddalenia się od bramy.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -668,7 +667,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                     )
                     Text(
                         "Zapisz lub odtwórz 3 bramy, numery telefonów, współrzędne GPS, " +
-                        "odległości aktywacji, aktywne sloty, warunki Android Auto i urządzenia BT, karencje bram. " +
+                        "odległości aktywacji, aktywne sloty, warunki Android Auto i urządzenia BT. " +
                         "Plik JSON zawiera prywatne dane – nie udostępniaj go publicznie.",
                         style = MaterialTheme.typography.bodySmall
                     )
