@@ -72,8 +72,8 @@ data class SettingsBackup(
                             slot.longitude.isFinite() && slot.longitude in -180.0..180.0) {
                         "Nieprawidłowe współrzędne GPS."
                     }
-                    require(slot.radiusMeters.isFinite() && slot.radiusMeters in 20f..500f) {
-                        "Odległość aktywacji musi wynosić 20–500 m."
+                    require(slot.radiusMeters.isFinite() && slot.radiusMeters in 0f..500f) {
+                        "Odległość aktywacji musi wynosić 0–500 m."
                     }
                     require(slot.hysteresisMeters.isFinite() && slot.hysteresisMeters in 0f..2000f) {
                         "Histereza musi wynosić 0–2000 m."
