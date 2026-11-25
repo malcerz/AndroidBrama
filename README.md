@@ -43,7 +43,7 @@ Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS
 5. **Zabezpieczenie przed pętlą połączeń (Maszyna Stanów + Histereza):**
    - Dedykowana instancja `GateTriggerStateMachine` dla każdego aktywnego slotu.
    - Połączenie telefoniczne wykonywane jest **tylko raz** po wjechaniu w strefę (`dystans <= promień`).
-   - Ponowne wyzwolenie następuje dopiero po opuszczeniu strefy na odległość `promień + ustawiona histereza` (domyślnie +150 m), co zapobiega powtarzaniu połączeń podczas manewrowania pod bramą. Pierwszy poprawny odczyt GPS już wewnątrz promienia może wyzwolić połączenie (np. 15 m przy promieniu 20 m). Po zgłoszeniu połączenia stan bramy zapisywany jest w DataStore i pozostaje zablokowany również po restarcie usługi; ponowne uzbrojenie wymaga opuszczenia strefy na `promień + histereza`. Przy bardzo małym promieniu aplikacja wymaga odpowiednio dokładnego odczytu GPS.
+   - Ponowne wyzwolenie następuje dopiero po opuszczeniu strefy na odległość `promień + ustawiona histereza` (domyślnie +150 m), co zapobiega powtarzaniu połączeń podczas manewrowania pod bramą. Pierwszy poprawny odczyt GPS już wewnątrz promienia może wyzwolić połączenie (np. 15 m przy promieniu 20 m). Po zgłoszeniu połączenia stan bramy zapisywany jest w DataStore i pozostaje zablokowany również po restarcie usługi; ponowne uzbrojenie wymaga opuszczenia strefy na `promień + histereza`. Od wersji 1.3.4 po uzyskaniu świeżego fixu satelitarnego do wejścia w strefę wystarczy zmierzony dystans <= ustawiony promień — brak ukrytej blokady dokładności GPS równej połowie promienia. Szacowana dokładność GPS jest pokazywana osobno w statusie. Dla bezpieczeństwa ponowne uzbrojenie wcześniej obsłużonej bramy nadal wymaga wiarygodnego wyjazdu poza promień + histerezę.
    - Gdy kilka stref się nakłada, jedno odświeżenie GPS może zlecić maksymalnie jedno połączenie. Wprowadzono ograniczenie kolejnych prób i kontrolę jakości pozycji GPS.
 
 6. **Nowoczesny interfejs w Jetpack Compose (Material 3):**
@@ -93,7 +93,7 @@ Aplikacja pasywnie skanuje reklamy BLE i **nie łączy się z urządzeniem**. Ob
 
 Android Auto **lub** wybrane urządzenie BT mogą uruchomić nasłuch satelitarnego GPS; jednak brama zadzwoni wyłącznie na podstawie **nowego fixu GPS_PROVIDER** z dokładnością odpowiednią do ustawionego promienia. Fix musi pochodzić z bieżącej sesji monitorowania i mieć maksymalnie 8 s. Bez satelitarnego fixu, np. w hali garażowej, połączenie nie będzie wykonywane. Opcja czasowej karencji BT została usunięta z działania i formularza; jej wartość w starszym JSON pozostaje rozpoznawana tylko dla zgodności wstecznej. Ponowne otwieranie tej samej bramy wciąż wymaga wyjazdu poza próg promień + histereza.
 
-Promień można wpisać ręcznie w zakresie 0–500 m (wcześniejszy dolny limit 20 m został usunięty). **Bardzo mały promień 1–5 m wymaga bardzo dokładnego GPS i może w praktyce nigdy nie zadziałać; ustawienie 0 m praktycznie uniemożliwia automatyczne otwarcie.**
+Promień można wpisać ręcznie w zakresie 0–500 m (wcześniejszy dolny limit 20 m został usunięty). **Mały promień 1–10 m jest wrażliwy na błąd pozycji GNSS: może otworzyć bramę wcześniej lub później niż wynika z rzeczywistej odległości. Sam FIX GPS nie oznacza metrowej dokładności ani nie daje pewności, że użytkownik znajduje się na zewnątrz. Ustawienie 0 m praktycznie uniemożliwia automatyczne otwarcie.**
 
 ### Ponowne uzbrajanie po utracie BT/Android Auto (od 1.3.2)
 
