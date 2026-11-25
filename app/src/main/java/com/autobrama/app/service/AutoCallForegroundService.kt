@@ -466,15 +466,16 @@ class AutoCallForegroundService : Service() {
     private fun onNewLocation(location: Location) {
         serviceScope.launch {
             locationMutex.withLock {
-                if (!locationListening || !trackingDecision.allowed ||
-                    !location.hasAccuracy() ||
-                    location.provider != LocationManager.GPS_PROVIDER ||
-                    location.elapsedRealtimeNanos < gpsSessionStartNanos
-                ) return@withLock
-                val ageNanos = SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
-                if (ageNanos < 0 || ageNanos > MAX_FIX_AGE_NANOS) {
+                if (!locationListening || !trackingDecision.allowed) return@withLock
+                if (!GpsFixPolicy.isCurrentSatelliteFix(
+                        provider = location.provider,
+                        fixTimeNanos = location.elapsedRealtimeNanos,
+                        sessionStartedNanos = gpsSessionStartNanos,
+                        nowNanos = SystemClock.elapsedRealtimeNanos(),
+                        hasAccuracy = location.hasAccuracy()
+                    )
+                ) {
                     _hasGpsFix.value = false
-                    updateNotification("Nieaktualny fix GPS – bez otwierania")
                     return@withLock
                 }
                 _hasGpsFix.value = true
