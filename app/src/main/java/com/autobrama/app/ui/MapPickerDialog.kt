@@ -57,7 +57,7 @@ fun MapPickerDialog(
     var hysteresisText by remember(slot.id) { mutableStateOf(slot.hysteresisMeters.roundToInt().toString()) }
     val parsedRadius = radiusText.toIntOrNull()
     val parsedHysteresis = hysteresisText.toIntOrNull()
-    val radiusValid = parsedRadius != null && parsedRadius in 20..500
+    val radiusValid = parsedRadius != null && parsedRadius in 0..500
     val hysteresisValid = parsedHysteresis != null && parsedHysteresis in 0..2000
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
@@ -253,7 +253,7 @@ fun MapPickerDialog(
                                     if (value.length <= 4 && value.all { it.isDigit() }) {
                                         radiusText = value
                                         val parsed = value.toIntOrNull()
-                                        if (parsed != null && parsed in 20..500) {
+                                        if (parsed != null && parsed in 0..500) {
                                             currentRadius = parsed.toFloat()
                                             mapViewRef?.let { map ->
                                                 updateMapOverlays(selectedLat, selectedLon, currentRadius, map)
@@ -281,7 +281,7 @@ fun MapPickerDialog(
                         }
 
                         Slider(
-                            value = currentRadius.coerceIn(20f, 500f),
+                            value = currentRadius.coerceIn(0f, 500f),
                             onValueChange = { newRadius ->
                                 currentRadius = newRadius
                                 radiusText = newRadius.roundToInt().toString()
@@ -289,15 +289,15 @@ fun MapPickerDialog(
                                     updateMapOverlays(selectedLat, selectedLon, newRadius, map)
                                 }
                             },
-                            valueRange = 20f..500f,
-                            steps = 47,
+                            valueRange = 0f..500f,
+                            steps = 0,
                             modifier = Modifier.fillMaxWidth()
                         )
 
                         Text(
                             text = if (radiusValid && hysteresisValid)
                                 "Ponowne uzbrojenie: ${radiusText.toInt() + hysteresisText.toInt()} m"
-                            else "Promień: 20–500 m, histereza: 0–2000 m",
+                            else "Promień: 0–500 m, histereza: 0–2000 m",
                             fontSize = 12.sp,
                             color = if (radiusValid && hysteresisValid)
                                 MaterialTheme.colorScheme.onSurfaceVariant
