@@ -534,6 +534,16 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         }
                     }
 
+                    // Pokaż użytkownikowi rzeczywistą niepewność pomiaru.
+                    // FIX GPS nie oznacza, że dokładność wynosi 1–5 metrów.
+                    closestGateStatus?.let { c ->
+                        Text(
+                            text = "Szacowana dokładność GPS: ±${c.gpsAccuracyMeters.roundToInt()} m",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
                     // Maszyna stanów najbliższej bramy
                     closestGateStatus?.let { c ->
                         Row(
