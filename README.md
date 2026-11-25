@@ -21,7 +21,7 @@ Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS
      - Własną edytowalną nazwę (np. *Dom*, *Firma*, *Działka*),
      - Dedykowany numer telefonu z przyciskiem szybkiego testu połączenia,
      - Indywidualne współrzędne geograficzne (szerokość i długość),
-     - Niezależne pole ręcznego wpisu promienia aktywacji (20–500 m, co 1 m) i opcjonalny suwak,\n     - Ręcznie ustawiana histereza dla każdej bramy (0–2000 m, domyślnie 150 m),
+     - Niezależne pole ręcznego wpisu promienia aktywacji (0–500 m, co 1 m) i opcjonalny suwak,\n     - Ręcznie ustawiana histereza dla każdej bramy (0–2000 m, domyślnie 150 m),
      - Przełącznik aktywności slotu.
 
 2. **Interaktywny wybór na mapie (OpenStreetMap / `osmdroid`):**
@@ -37,7 +37,7 @@ Dzięki integracji z **Android Auto** aplikacja może uruchamiać śledzenie GPS
 
 4. **Niezawodna usługa w tle (`Foreground Service`):**
    - Działa jako usługa typu `location` (`FOREGROUND_SERVICE_TYPE_LOCATION`) z powiadomieniem ciągłym.
-   - Odczyt pozycji przez `FusedLocationProviderClient` z priorytetem `PRIORITY_HIGH_ACCURACY` co 3 sekundy.
+   - Automatyczne otwieranie korzysta tylko z nowego satelitarnego fixu `LocationManager.GPS_PROVIDER`; odczyty Wi-Fi, sieciowe, Fused oraz pozycje zapamiętane nie mogą uruchomić połączenia. Po utracie fixu nie ma automatycznego otwierania.
    - Ciągłe powiadomienie informuje kierowcę o najbliższej bramie i odległości w czasie rzeczywistym.
 
 5. **Zabezpieczenie przed pętlą połączeń (Maszyna Stanów + Histereza):**
@@ -89,13 +89,15 @@ Wskazać można **dowolne urządzenie BLE** (np. lokalizator przy rowerze, radar
 
 Aplikacja pasywnie skanuje reklamy BLE i **nie łączy się z urządzeniem**. Obecność potwierdzają dwa sygnały reklamowe odebrane w odstępie co najmniej 2 sekund (w ciągu 20 sekund); potwierdzony sygnał jest ważny przez maksymalnie 40 sekund od ostatniej reklamy. Wyszukiwanie urządzeń (30 s) działa w trybie szybkim. Skan jest wznawiany po wyłączeniu i włączeniu Bluetooth oraz odświeżany co 25 minut; przy wyłączonej lokalizacji systemowej status BLE informuje, że skan nie działa. Nasłuch działa tylko przy włączonej automatyzacji. Sygnał BLE oznacza **obecność w pobliżu**, a nie potwierdzoną jazdę. Część urządzeń (np. lokalizatory typu Find My) często zmienia swój prywatny adres BLE – wtedy rozpoznanie opiera się na nazwie. Android może ograniczać skanowanie w tle. Android 12+ wymaga uprawnienia **Urządzenia w pobliżu** (do skanowania wystarcza BLUETOOTH_SCAN) oraz dokładnej lokalizacji.
 
-### Karencja (osobno dla każdej bramy)
+### Warunek fixu satelitarnego (od 1.3.3)
 
-W ustawieniach bramy, obok promienia i histerezy, ustawia się **karencję po wykryciu urządzenia BT** (domyślnie 10 min, 0 = brak). Przez ten czas od wykrycia urządzenia brama nie otwiera się: jeśli w tym czasie jesteś w jej strefie (np. urządzenie włączone w garażu), brama jest oznaczana jako obsłużona i uzbraja się dopiero po odjechaniu na `promień + histereza`. Krótka utrata sygnału w trasie nie zaczyna karencji od nowa; nowa sesja zaczyna się po ponad 10 minutach bez sygnału. Przy połączeniu z Android Auto karencji nie ma. Pozycja pochodzi z Fused Location (bez oczekiwania na fix satelitarny).
+Android Auto **lub** wybrane urządzenie BT mogą uruchomić nasłuch satelitarnego GPS; jednak brama zadzwoni wyłącznie na podstawie **nowego fixu GPS_PROVIDER** z dokładnością odpowiednią do ustawionego promienia. Fix musi pochodzić z bieżącej sesji monitorowania i mieć maksymalnie 8 s. Bez satelitarnego fixu, np. w hali garażowej, połączenie nie będzie wykonywane. Opcja czasowej karencji BT została usunięta z działania i formularza; jej wartość w starszym JSON pozostaje rozpoznawana tylko dla zgodności wstecznej. Ponowne otwieranie tej samej bramy wciąż wymaga wyjazdu poza próg promień + histereza.
+
+Promień można wpisać ręcznie w zakresie 0–500 m (wcześniejszy dolny limit 20 m został usunięty). **Bardzo mały promień 1–5 m wymaga bardzo dokładnego GPS i może w praktyce nigdy nie zadziałać; ustawienie 0 m praktycznie uniemożliwia automatyczne otwarcie.**
 
 ### Ponowne uzbrajanie po utracie BT/Android Auto (od 1.3.2)
 
-Jeśli brama została wcześniej obsłużona, jej blokada jest zapisywana na dysku. Po zniknięciu urządzenia BT/Android Auto aplikacja **nie dzwoni**, ale na czas istnienia aktywnej blokady co około 2 minuty pobiera energooszczędne położenie, aby wykryć wyjazd. Po **dwóch świeżych pomiarach** co najmniej 15 s od siebie, kiedy nawet po uwzględnieniu dokładności telefon jest poza progiem `promień + histereza + 20 m`, zapis blokady jest usuwany. Po zwolnieniu ostatniej blokady dodatkowe monitorowanie ustaje. Przy wykryciu BT lub Android Auto uruchamia się dotychczasowe normalne monitorowanie i nadal obowiązują wszystkie zasady karencji, odległości i dzwonienia. **Tryb obserwowania wyjazdu nigdy nie może wywołać połączenia.** Gdy system nie dostarcza nowych lokalizacji (lub ubije Foreground Service), uzbrojenie nie jest gwarantowane.
+Jeśli brama została wcześniej obsłużona, jej blokada jest zapisywana na dysku. Po zniknięciu urządzenia BT/Android Auto aplikacja **nie dzwoni**, ale na czas istnienia aktywnej blokady co około 2 minuty pobiera energooszczędne położenie, aby wykryć wyjazd. Po **dwóch świeżych pomiarach** co najmniej 15 s od siebie, kiedy nawet po uwzględnieniu dokładności telefon jest poza progiem `promień + histereza + 20 m`, zapis blokady jest usuwany. Po zwolnieniu ostatniej blokady dodatkowe monitorowanie ustaje. Przy wykryciu BT lub Android Auto uruchamia się dotychczasowe normalne monitorowanie i nadal obowiązują zasady odległości, fixu GPS oraz dzwonienia. **Tryb obserwowania wyjazdu nigdy nie może wywołać połączenia.** Gdy system nie dostarcza nowych lokalizacji (lub ubije Foreground Service), uzbrojenie nie jest gwarantowane.
 
 Lista wykrytych urządzeń zachowuje kolejność wykrycia (nowe są dopisywane na końcu), urządzenia bez nazwy są domyślnie ukryte. Status pokazuje, kiedy wybrane urządzenie było ostatnio słyszane.
 
@@ -103,7 +105,7 @@ Lista wykrytych urządzeń zachowuje kolejność wykrycia (nowe są dopisywane n
 
 W głównym ekranie wybierz **Eksport JSON**, aby zapisać plik `AndroidBrama-ustawienia.json` przez systemowy wybór dokumentu Android. **Import JSON** pozwala wybrać taki plik, sprawdza jego strukturę i zawartość, a przed zastąpieniem konfiguracji wymaga potwierdzenia.
 
-W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, histerezy poszczególnych bram, karencje poszczególnych bram, a także ustawienie automatyzacji, wymóg Android Auto oraz wybrane urządzenie BLE (adres, nazwa, wymóg). Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Starsze pliki JSON bez pola histerezy są nadal obsługiwane i otrzymują domyślne 150 m. Pliki bez pola karencji otrzymują domyślne 10 min; pole Czekaj na GPS ze starszych plików jest ignorowane. Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
+W pliku przechowywane są ustawienia trzech bram: nazwy, numery, współrzędne, promienie aktywacji, histerezy poszczególnych bram, historyczne wartości karencji (ignorowane w nowej wersji), a także ustawienie automatyzacji, wymóg Android Auto oraz wybrane urządzenie BLE (adres, nazwa, wymóg). Nie zapisujemy zgód systemowych ani historii połączeń. **Plik zawiera prywatne dane – nie udostępniaj go publicznie.** Starsze pliki JSON bez pola histerezy są nadal obsługiwane i otrzymują domyślne 150 m. Starsze pliki zachowują kompatybilność, ale pole karencji i historyczna opcja Czekaj na GPS nie wpływają już na działanie: fix satelitarny jest teraz zawsze wymagany. Po imporcie włączenie automatyzacji może rozpocząć monitorowanie, jeśli system pozwoli uruchomić usługę.
 
 ## ⚠️ Android 11+ i ograniczenia systemowe
 
