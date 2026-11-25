@@ -787,15 +787,10 @@ fun SlotConfigurationForm(
     var hysteresisText by remember(slot.id, slot.hysteresisMeters) {
         mutableStateOf(slot.hysteresisMeters.roundToInt().toString())
     }
-    var graceText by remember(slot.id, slot.graceMinutes) {
-        mutableStateOf(slot.graceMinutes.toString())
-    }
     val radiusValue = radiusText.toIntOrNull()
     val hysteresisValue = hysteresisText.toIntOrNull()
-    val graceValue = graceText.toIntOrNull()
-    val radiusValid = radiusValue != null && radiusValue in 20..500
+    val radiusValid = radiusValue != null && radiusValue in 0..500
     val hysteresisValid = hysteresisValue != null && hysteresisValue in 0..2000
-    val graceValid = graceValue != null && graceValue in 0..GateLocationSlot.MAX_GRACE_MINUTES
     var isEnabled by remember(slot.id, slot.enabled) { mutableStateOf(slot.enabled) }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -884,14 +879,14 @@ fun SlotConfigurationForm(
                 suffix = { Text("m") },
                 singleLine = true,
                 isError = !radiusValid,
-                supportingText = { Text("Zakres 20–500 m, wpisz dokładną liczbę metrów") },
+                supportingText = { Text("Zakres 0–500 m, wpisz dokładną liczbę metrów (0 = praktycznie nie otwiera)") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )
             Slider(
-                value = (radiusValue?.toFloat() ?: slot.radiusMeters).coerceIn(20f, 500f),
+                value = (radiusValue?.toFloat() ?: slot.radiusMeters).coerceIn(0f, 500f),
                 onValueChange = { radiusText = it.roundToInt().toString() },
-                valueRange = 20f..500f,
-                steps = 47,
+                valueRange = 0f..500f,
+                steps = 0,
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
@@ -907,28 +902,12 @@ fun SlotConfigurationForm(
                 supportingText = { Text("Zakres 0–2000 m; domyślnie 150 m") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
             )
-            OutlinedTextField(
-                value = graceText,
-                onValueChange = { value ->
-                    if (value.length <= 3 && value.all { it.isDigit() }) graceText = value
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Karencja po wykryciu urządzenia BT") },
-                suffix = { Text("min") },
-                singleLine = true,
-                isError = !graceValid,
-                supportingText = {
-                    Text("0–${GateLocationSlot.MAX_GRACE_MINUTES} min; 0 = bez karencji. " +
-                        "Nie dotyczy Android Auto")
-                },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-            )
             Text(
-                text = if (radiusValid && hysteresisValid && graceValid)
+                text = if (radiusValid && hysteresisValid)
                     "Ponowne uzbrojenie po oddaleniu na co najmniej ${radiusValue!! + hysteresisValue!!} m (promień + histereza)"
                 else "Wprowadź poprawne wartości, aby zapisać ustawienia.",
                 fontSize = 12.sp,
-                color = if (radiusValid && hysteresisValid && graceValid) Color.DarkGray
+                color = if (radiusValid && hysteresisValid) Color.DarkGray
                     else MaterialTheme.colorScheme.error
             )
         }
@@ -941,13 +920,12 @@ fun SlotConfigurationForm(
                     phoneNumber = phoneInput,
                     radiusMeters = radiusValue!!.toFloat(),
                     hysteresisMeters = hysteresisValue!!.toFloat(),
-                    graceMinutes = graceValue!!,
                     enabled = isEnabled
                 )
                 onUpdateSlot(updated)
             },
             modifier = Modifier.fillMaxWidth(),
-            enabled = radiusValid && hysteresisValid && graceValid,
+            enabled = radiusValid && hysteresisValid,
             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
         ) {
             Icon(Icons.Default.Save, contentDescription = null)
