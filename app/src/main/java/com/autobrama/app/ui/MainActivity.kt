@@ -97,6 +97,7 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
 
     val isServiceRunning by viewModel.isServiceRunning.collectAsState()
     val isGpsActive by viewModel.isGpsActive.collectAsState()
+    val hasGpsFix by viewModel.hasGpsFix.collectAsState()
     val isRearmMonitoring by viewModel.isRearmMonitoring.collectAsState()
     val serviceStatusMessage by viewModel.serviceStatusMessage.collectAsState()
     val pendingImport by viewModel.pendingImport.collectAsState()
@@ -501,12 +502,13 @@ fun AutoBramaScreen(viewModel: MainViewModel) {
                         Text("Foreground Service:", style = MaterialTheme.typography.bodyMedium)
                         BadgeBox(
                             text = when {
-                                isGpsActive -> "GPS AKTYWNY"
+                                isGpsActive && hasGpsFix -> "FIX GPS"
+                                isGpsActive -> "CZEKAM NA FIX GPS"
                                 isRearmMonitoring -> "SPRAWDZAM WYJAZD"
                                 isServiceRunning -> "CZUWA (GPS OFF)"
                                 else -> "ZATRZYMANY"
                             },
-                            backgroundColor = if (isGpsActive) Color(0xFF2196F3) else if (isRearmMonitoring) Color(0xFFE65100) else if (isServiceRunning) Color(0xFF00897B) else Color(0xFF9E9E9E)
+                            backgroundColor = if (hasGpsFix) Color(0xFF2E7D32) else if (isGpsActive) Color(0xFFE65100) else if (isRearmMonitoring) Color(0xFFE65100) else if (isServiceRunning) Color(0xFF00897B) else Color(0xFF9E9E9E)
                         )
                     }
 
