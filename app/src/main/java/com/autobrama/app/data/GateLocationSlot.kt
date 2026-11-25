@@ -12,7 +12,7 @@ data class GateLocationSlot(
     val longitude: Double,
     val radiusMeters: Float,
     val hysteresisMeters: Float = 150.0f,
-    /** Minutes after the selected BT device appears during which this gate stays closed. */
+    /** Legacy setting kept for backwards-compatible JSON backups; no longer used. */
     val graceMinutes: Int = DEFAULT_GRACE_MINUTES
 ) {
     fun toJsonObject(): JSONObject {
