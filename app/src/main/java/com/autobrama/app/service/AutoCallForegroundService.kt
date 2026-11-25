@@ -58,7 +58,8 @@ import kotlinx.coroutines.sync.withLock
 data class ActiveGateStatus(
     val slot: GateLocationSlot,
     val distanceMeters: Float,
-    val zoneState: GateZoneState
+    val zoneState: GateZoneState,
+    val gpsAccuracyMeters: Float
 )
 
 /**
@@ -501,7 +502,7 @@ class AutoCallForegroundService : Service() {
 
                 val statuses = mutableMapOf<Int, ActiveGateStatus>()
                 val triggerCandidates = mutableListOf<Pair<GateLocationSlot, Float>>()
-                var poorAccuracy = false
+                var unverifiedDeparture = false
                 for (slot in activeSlots) {
                     val distance = FloatArray(1)
                     Location.distanceBetween(
@@ -515,22 +516,31 @@ class AutoCallForegroundService : Service() {
                     }
                     // Apply any UI/import edits during live monitoring.
                     sm.setHysteresisMeters(slot.hysteresisMeters)
-                    // Never advance zone state on a coarse or uncertain fix.
-                    val maxAccuracy = minOf(50f, maxOf(1f, slot.radiusMeters / 2f))
-                    // A coarse fix far outside a gate is safe for arming,
-                    // while entry into the activation zone needs precise GPS.
-                    val definitelyOutside =
-                        distance[0] - location.accuracy >= slot.radiusMeters + slot.hysteresisMeters
-                    if (location.accuracy <= maxAccuracy ||
-                        (location.accuracy <= 100f && definitelyOutside)
-                    ) {
+                    // A *fresh satellite fix* and measured distance within the
+                    // configured radius are sufficient to enter the zone.
+                    // Previously accuracy <= radius / 2 silently disabled
+                    // entry for small radii (e.g. 10 m -> required <= 5 m).
+                    //
+                    // Rearming a previously triggered gate remains conservative:
+                    // a far-away GPS jump cannot clear its persisted latch.
+                    val inZone = GateDistancePolicy.isInside(
+                        distance[0], slot.radiusMeters
+                    )
+                    val beyondHysteresis =
+                        distance[0] >= slot.radiusMeters + slot.hysteresisMeters
+                    val exitConfirmed = GateDistancePolicy.safelyBeyondHysteresis(
+                        distance[0], location.accuracy,
+                        slot.radiusMeters, slot.hysteresisMeters
+                    )
+                    val latched = sm.currentState != GateZoneState.OUTSIDE_ZONE
+                    if (!latched || inZone || !beyondHysteresis || exitConfirmed) {
                         if (sm.processDistance(distance[0], slot.radiusMeters)
                             is StateMachineAction.TriggerCall
                         ) {
                             triggerCandidates.add(slot to distance[0])
                         }
                     } else {
-                        poorAccuracy = true
+                        unverifiedDeparture = true
                     }
                     // Only a validated departure beyond radius + configured hysteresis
                     // re-arms a gate that was triggered before restart.
@@ -539,7 +549,9 @@ class AutoCallForegroundService : Service() {
                     ) {
                         nextLatches.remove(slot.id)
                     }
-                    statuses[slot.id] = ActiveGateStatus(slot, distance[0], sm.currentState)
+                    statuses[slot.id] = ActiveGateStatus(
+                        slot, distance[0], sm.currentState, location.accuracy
+                    )
                 }
                 _gateStatuses.value = statuses
                 val closest = statuses.values.minByOrNull { it.distanceMeters }
@@ -595,7 +607,7 @@ class AutoCallForegroundService : Service() {
                     }
                 } else if (closest != null) {
                     val status = when {
-                        poorAccuracy -> "GPS niedokładny – czekam na lepszy sygnał"
+                        unverifiedDeparture -> "Oczekuję na potwierdzenie oddalenia poza strefę histerezy"
                         closest.zoneState == GateZoneState.HYSTERESIS_COOLDOWN ->
                             "Blokada ponownego połączenia: wyjdź poza ${(closest.slot.radiusMeters + closest.slot.hysteresisMeters).toInt()} m"
                         closest.zoneState == GateZoneState.IN_ZONE_TRIGGERED ->
