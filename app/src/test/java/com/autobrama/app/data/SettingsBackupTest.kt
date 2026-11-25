@@ -32,6 +32,31 @@ class SettingsBackupTest {
         assertEquals("19813-5", restored.radarConfig.name)
     }
 
+    @Test fun radiiBelowPrevious20MeterMinimumRoundTrip() {
+        for (radius in listOf(0f, 1f, 5f, 10f, 19f)) {
+            val settings = sample().copy(slots = sample().slots.map {
+                if (it.id == 1) it.copy(radiusMeters = radius) else it
+            })
+            assertEquals(radius, SettingsBackup.parse(settings.toJson()).slots.first().radiusMeters, 0f)
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectNegativeRadius() {
+        val bad = sample().copy(slots = sample().slots.map {
+            if (it.id == 1) it.copy(radiusMeters = -1f) else it
+        })
+        SettingsBackup.parse(bad.toJson())
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectRadiusAbove500Meters() {
+        val bad = sample().copy(slots = sample().slots.map {
+            if (it.id == 1) it.copy(radiusMeters = 501f) else it
+        })
+        SettingsBackup.parse(bad.toJson())
+    }
+
     @Test fun gateGraceRoundTripAndDefault() {
         val withGrace = sample().copy(
             slots = sample().slots.map { if (it.id == 2) it.copy(graceMinutes = 3) else it }
