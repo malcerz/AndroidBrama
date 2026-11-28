@@ -1,0 +1,46 @@
+name: Compare eBookAudioReader signing certificate
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compare-ebook-signing.yml'
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Install Android build tools
+        run: sdkmanager "build-tools;35.0.0"
+      - name: Compare source key and existing signed Release
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          keyfile="$(mktemp "$RUNNER_TEMP/compare-key.XXXXXX")"
+          apk="$(mktemp "$RUNNER_TEMP/ebook.XXXXXX")"
+          trap 'rm -f "$keyfile" "$apk"' EXIT
+          test -n "$KEYSTORE_BASE64" && test -n "$KEYSTORE_PASSWORD" && test -n "$KEY_ALIAS"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keyfile"
+          source="$(keytool -exportcert -keystore "$keyfile" -storepass:env KEYSTORE_PASSWORD -alias "$KEY_ALIAS" | sha256sum | awk '{print $1}')"
+          curl --fail --location --silent --show-error --retry 3 'https://github.com/malcerz/eBookAudioReader/releases/download/v0.3.0-build-9/eBookAudioReader-release.apk' -o "$apk"
+          signer="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          dest="$("$signer" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr -d ':[:space:]')"
+          test -n "$source" && test -n "$dest"
+          if [[ "$source" == "$dest" ]]; then
+            echo "CERTIFICATE_MATCH: the existing eBookAudioReader Release uses the AndroidBrama signing certificate. No secret overwrite required."
+          else
+            echo "::warning::CERTIFICATE_DIFFERENT: existing Release uses a different signing certificate. No secrets overwritten; switching would break updates."
+          fi
